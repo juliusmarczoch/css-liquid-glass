@@ -1,6 +1,6 @@
 # Liquid Glass for the web
 
-![The glass lying over the headline and refracting it](docs/preview.webp)
+![Liquid glass pill reading "Glass | Study 001" over two gradient pictures](public/og.jpg)
 
 A liquid glass element that **really refracts the live page behind it**. No WebGL, no canvas, no screenshots of the DOM: one SVG displacement filter inside a CSS `backdrop-filter`, plus a few thin layers that light the edge.
 
@@ -12,6 +12,8 @@ This is a minimal demo extracted from [nordify.io](https://nordify.io): one glas
 - **Reflection.** A second layer mirrors what sits *next to* the glass into its rim, weighted by Fresnel and total internal reflection.
 - **Light.** Two lit caps (top right, bottom left), a darker rim elsewhere, a soft caustic and a shadow that the glass itself refracts.
 - **Nine-slice maps.** The displacement maps are four corners, four edges and a neutral centre, baked once as tiny PNGs. Changing the size only moves the tiles, so the glass can be animated without rebuilding anything.
+
+![The glass refracting the Nordify lettering on a video and the word "Liquid" split across two pictures](docs/demo.jpg)
 
 ## Run it
 
