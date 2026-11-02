@@ -1,0 +1,571 @@
+:root {
+  --hue: 236.8;
+  --bg: oklch(96% 0.008 var(--hue));
+  --fg: oklch(0.142 0.007 var(--hue));
+  --fg-2: oklch(39.2% 0.005 var(--hue));
+  --fg-3: oklch(0.142 0.007 var(--hue) / 0.56);
+  --accent: oklch(0.6668 0.1847 var(--hue));
+  --gutter: clamp(20px, 3.2vw, 44px);
+  --h1: clamp(3.5rem, 15vw, 12.5rem);
+  --lift: 3svh;
+  --r-card: 40px;
+  --hairline: oklch(0.142 0.007 var(--hue) / 0.12);
+  --panel: oklch(0.142 0.007 var(--hue) / 0.05);
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+/* The root background only shows in the overscroll area. main.ts turns it
+   black once the page is past the light part, so the bottom bounce is dark
+   and the top one stays light. */
+html {
+  background: var(--bg);
+}
+
+html.end-dark {
+  background: #000;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: Figtree, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: clamp(0.9875rem, 0.95rem + 0.2vw, 1.0625rem);
+  line-height: 1.5;
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
+}
+
+img,
+video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Own layer from the start, so the video is composited before it scrolls in
+   instead of on its first visible frame. Not an ancestor of the glass, so it
+   does not touch its backdrop. */
+video {
+  will-change: transform;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav,
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 28px var(--gutter);
+}
+
+/* The same box as the navbar on nordify.io, so the logo sits on exactly the
+   same spot: inset from the top, --gutter at the sides, and the row capped
+   at 1440px and centred. */
+.nav {
+  position: absolute;
+  inset: clamp(20px, 3vh, 32px) 0 auto;
+  padding: 0 calc(var(--gutter) + max(0px, (100% - 2 * var(--gutter) - 1440px) / 2));
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  line-height: 1;
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.logo img {
+  width: auto;
+  height: 25px;
+}
+
+.dot {
+  color: var(--accent);
+}
+
+.nav-label {
+  font-size: 1.0625rem;
+  font-weight: 500;
+  color: var(--fg-3);
+}
+
+/* Tied to the headline, and so to the glass: the content column stays a bit
+   wider than the glass at every size. */
+.wrap {
+  max-width: calc(var(--h1) * 6.2 + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+/* The video starts just below the fold: the first screen shows only the
+   headline under the glass. */
+.hero + figure {
+  margin-top: calc(50svh + var(--lift) - var(--glass-h, var(--h1)) / 2 + 8px);
+}
+
+/* The first screen ends exactly at the bottom edge of the glass. The
+   headline's box is centred on the glass: middle of the screen, raised by
+   --lift. */
+.hero {
+  position: relative;
+  display: grid;
+  place-items: end center;
+  min-height: calc(50svh - var(--lift) + var(--glass-h, var(--h1)) / 2);
+  text-align: center;
+}
+
+/* A bit above halfway between the bottom of the glass and the bottom of the
+   screen: the hero ends at the glass, the gap below it is the video's top
+   margin. */
+.ctas {
+  position: absolute;
+  top: calc(100% + (50svh + var(--lift) - var(--glass-h, var(--h1)) / 2) * 0.38);
+  left: 50%;
+  translate: -50% -50%;
+  display: flex;
+  gap: 12px;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  border-radius: 999px;
+  background: #000;
+  color: #fff;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.cta-brand {
+  background: var(--accent);
+}
+
+/* Under the code, in the flow of the dark section. */
+.cta-light {
+  margin-top: 32px;
+  background: #fff;
+  color: #000;
+}
+
+.cta svg {
+  opacity: 0.5;
+}
+
+h1 {
+  margin-bottom: calc((var(--glass-h, var(--h1)) - var(--h1)) / 2);
+  font-size: var(--h1);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.055em;
+  white-space: nowrap;
+}
+
+figure {
+  overflow: hidden;
+  aspect-ratio: 3 / 2;
+  border-radius: var(--r-card);
+}
+
+.wide {
+  position: relative;
+  aspect-ratio: 16 / 9;
+}
+
+/* Figtree, self-hosted (SIL OFL, see public/fonts/Figtree-OFL.txt): the
+   variable font covers every weight. */
+@font-face {
+  font-family: Figtree;
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url("/fonts/figtree-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: Figtree;
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url("/fonts/figtree-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Nordify's script face, as on nordify.io (SIL OFL, see
+   public/fonts/MomoSignature-OFL.txt). */
+@font-face {
+  font-family: "Momo Signature";
+  src: url("/fonts/momo-signature.woff2") format("woff2");
+  font-display: swap;
+}
+
+.signature {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: "Momo Signature", cursive;
+  font-size: clamp(3.5rem, 13vw, 11rem);
+  font-weight: 500;
+  -webkit-text-stroke: 0.015em currentColor;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(12px, 1.6vw, 20px);
+  aspect-ratio: auto;
+  overflow: visible;
+}
+
+.pair img {
+  aspect-ratio: 4 / 5;
+  border-radius: var(--r-card);
+}
+
+.cell {
+  position: relative;
+}
+
+/* "Liq" and "uid" meet across the gap between the two pictures and read as
+   one word. */
+.pair .signature {
+  font-size: clamp(3rem, 10vw, 9rem);
+}
+
+.signature.to-end {
+  justify-items: end;
+  padding-right: 6%;
+}
+
+.signature.to-start {
+  justify-items: start;
+  padding-left: 6%;
+}
+
+/* A big line with a short paragraph, as much space above and below as
+   between the pictures. */
+.statement {
+  padding: 32vh 0;
+  text-align: center;
+}
+
+/* The parked glass hangs half its height (and its shadow) below the dark
+   pictures; the next section starts that much lower. */
+.after-glass {
+  padding-top: calc(32vh + var(--glass-h, var(--h1)) * 0.75);
+}
+
+.statement h2,
+.faq h2 {
+  font-size: clamp(1.5rem, 1rem + 2vw, 2.5rem);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.statement p {
+  max-width: 34rem;
+  margin: 20px auto 0;
+  font-size: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem);
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  max-width: 34rem;
+  margin: 32px auto 0;
+  padding: 22px 26px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: 24px;
+  background: var(--panel);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  text-align: left;
+  color: var(--fg-2);
+}
+
+pre code {
+  font-size: inherit;
+}
+
+pre .k {
+  color: var(--fg);
+}
+
+.faq {
+  max-width: 44rem;
+  margin: 0 auto;
+}
+
+.faq h2 {
+  margin-bottom: 32px;
+  text-align: center;
+}
+
+.faq details {
+  border-top: 1px solid var(--hairline);
+}
+
+.faq details:last-child {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.faq summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 0;
+  font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.25rem);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  list-style: none;
+  cursor: pointer;
+}
+
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq summary::after {
+  content: "+";
+  color: var(--fg-3);
+  font-weight: 400;
+}
+
+.faq details[open] summary::after {
+  content: "−";
+}
+
+.faq details p {
+  max-width: 38rem;
+  padding-bottom: 24px;
+  color: var(--fg-2);
+}
+
+.faq a,
+.statement a {
+  text-decoration: underline;
+  text-decoration-color: var(--hairline);
+  text-underline-offset: 3px;
+}
+
+.footer-links {
+  display: flex;
+  gap: 28px;
+}
+
+.license,
+.footer-nordify svg {
+  opacity: 0.55;
+}
+
+.footer-nordify {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.footer a:hover {
+  color: var(--fg);
+}
+
+.footer {
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding-top: 32vh;
+  font-size: 1.0625rem;
+  color: var(--fg-3);
+}
+
+/* OLED black. main.ts switches the glass to its dark tuning over it. */
+.dark {
+  --fg: oklch(0.97 0.004 var(--hue));
+  --fg-2: oklch(0.97 0.004 var(--hue) / 0.68);
+  --fg-3: oklch(0.97 0.004 var(--hue) / 0.5);
+  --hairline: oklch(0.97 0.004 var(--hue) / 0.16);
+  --panel: oklch(0.97 0.004 var(--hue) / 0.07);
+  background: #000;
+  color: var(--fg);
+}
+
+/* --- The glass ----------------------------------------------------------- */
+
+/* Centred without transform: inset + margin auto, raised by --lift. A
+   transform or will-change here would put the glass on its own layer and cut
+   off its backdrop. main.ts sets --glass-w / --glass-h on :root from the
+   headline, so the glass just covers "Liquid Glass". */
+.glass {
+  position: fixed;
+  inset: 0 0 calc(2 * var(--lift));
+  z-index: 10;
+  width: var(--glass-w, 60px);
+  height: var(--glass-h, 60px);
+  margin: auto;
+  pointer-events: none;
+}
+
+/* The light and the dark veil and edge light, crossfaded by main.ts. Opacity
+   on its own layer is blended by the compositor; nothing is repainted. */
+.glass-tone {
+  will-change: opacity;
+  transition: opacity 0.45s ease;
+}
+
+/* The statements' text, read inside the glass (main.ts). Same box as the
+   glass, above it and its covers. */
+.glass-text {
+  position: fixed;
+  inset: 0 0 calc(2 * var(--lift));
+  z-index: 10;
+  width: var(--glass-w, 60px);
+  height: var(--glass-h, 60px);
+  margin: auto;
+  pointer-events: none;
+  /* Titles sliding in or out stay inside the pill. */
+  overflow: hidden;
+  border-radius: 9999px;
+}
+
+/* The title inside the glass, clear of the round ends; --fit shrinks it
+   until it fits. */
+.glass-copy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0 calc(var(--glass-h, 60px) * 0.42);
+  text-align: center;
+  color: var(--fg);
+  will-change: opacity, transform;
+}
+
+.glass-copy h2 {
+  font-size: calc(clamp(1.25rem, 0.9rem + 1.6vw, 2.5rem) * var(--fit, 1));
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.glass-copy.on-dark {
+  --fg: oklch(0.97 0.004 var(--hue));
+}
+
+/* Parked at the bottom of the dark pictures (main.ts): scrolls away with
+   the page. */
+.parked .glass,
+.parked .glass-text {
+  position: absolute;
+  inset: var(--park-top) 0 auto;
+  margin: 0 auto;
+}
+
+/* The page keeps the text for screen readers and search; it is read in the
+   glass. */
+.in-glass > h2 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Shown by main.ts in browsers without refraction: fixed in the navbar
+   row, its top level with the top of the navbar texts (row inset + 12px).
+   Where the row is too narrow, right under it. */
+.notice {
+  position: fixed;
+  left: 50%;
+  top: calc(clamp(20px, 3vh, 32px) + 12px);
+  translate: -50% 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(34rem, 100vw - 2 * var(--gutter));
+  padding: 14px 14px 14px 20px;
+  border-radius: 20px;
+  background: oklch(0.142 0.007 var(--hue));
+  color: oklch(0.97 0.004 var(--hue) / 0.72);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 1100px) {
+  .notice {
+    top: calc(clamp(20px, 3vh, 32px) + 46px + 12px);
+  }
+}
+
+.notice strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.notice button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: oklch(1 0 0 / 0.1);
+  color: #fff;
+  font: inherit;
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .ctas {
+    gap: 8px;
+  }
+
+  .cta {
+    gap: 8px;
+    padding: 12px 17px;
+    font-size: 0.875rem;
+  }
+
+  .pair {
+    grid-template-columns: 1fr;
+  }
+
+  .signature.to-end,
+  .signature.to-start {
+    justify-items: center;
+    padding: 0;
+  }
+}

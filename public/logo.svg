@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_8" data-name="Layer 8" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="119.94 687.36 973.04 1074.64">
+  <defs>
+    <style>
+      @supports (stop-color: oklch(0.6668 0.1847 236.80)) {
+        .palette-1 { stop-color: oklch(0.784309 0.144001 236.80); }
+        .palette-2 { stop-color: oklch(0.666800 0.184700 236.80); }
+        .palette-3 { stop-color: oklch(0.528256 0.155094 236.80); }
+        .palette-4 { stop-color: oklch(0.656843 0.182836 236.80); }
+        .palette-5 { stop-color: oklch(0.669673 0.186649 236.80); }
+        .palette-6 { stop-color: oklch(0.831661 0.177330 236.80); }
+        .palette-7 { stop-color: oklch(0.896719 0.097837 236.80); }
+      }
+    </style>
+    <clipPath id="clippath">
+      <path fill="none" stroke-width="0" d="m1082.49,1594.35l-369.17-836.41c-12.15-27.54-32.19-47-55.48-58.42-16.92-8.3-35.56-12.36-54.17-12.16h0s0,0-.01,0c-.06,0-.13,0-.19,0h0c-43.28.62-86.27,24.22-106.71,70.81l-366.43,835.09c-25.97,59.19-.39,118.6,45.24,147.81,31.9,20.42,73.59,26.09,114.33,6.57l262.77-125.82c16.12-7.72,33.56-11.59,51-11.61h0c17.35,0,34.7,3.79,50.76,11.41l269.12,127.55c13.5,6.4,27.1,10.04,40.4,11.31h0c25.78,2.44,50.45-4.04,71.18-16.7,47.09-28.74,73.9-89.27,47.35-149.43Z"/>
+    </clipPath>
+    <linearGradient id="linear-gradient" x1="598.75" y1="1178.1" x2="941.06" y2="1178.1" gradientUnits="userSpaceOnUse">
+      <stop offset="0" class="palette-1" stop-color="#49c5ff"/>
+      <stop offset="1" class="palette-2" stop-color="#00a0f5"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="603.67" y1="1230.26" x2="1092.98" y2="1230.26" gradientUnits="userSpaceOnUse">
+      <stop offset="0" class="palette-3" stop-color="#0074b8"/>
+      <stop offset="1" class="palette-4" stop-color="#009df1"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="172.66" y1="1571.07" x2="603.67" y2="1571.07" gradientUnits="userSpaceOnUse">
+      <stop offset="0" class="palette-3" stop-color="#0074b8"/>
+      <stop offset="1" class="palette-5" stop-color="#00a1f7"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-4" x1="119.94" y1="1214.22" x2="603.67" y2="1214.22" gradientUnits="userSpaceOnUse">
+      <stop offset="0" class="palette-6" stop-color="#1ad7ff"/>
+      <stop offset="1" class="palette-7" stop-color="#9de7ff"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#clippath)">
+    <path fill="url(#linear-gradient)" stroke-width="0" d="m598.75,1386.44l342.31,283.26-281.83-971.31c-16.99-8.33-38.47-12.11-57.14-11.87"/>
+    <path fill="url(#linear-gradient-2)" stroke-width="0" d="m1082.49,1594.35l-369.17-836.41c-12.15-27.54-32.19-47-55.48-58.42l277.25,960.94-331.43-275.72v225.48c17.35,0,34.7,3.79,50.76,11.41l269.12,127.55c13.5,6.4,27.1,10.04,40.4,11.31h0c25.78,2.44,50.45-4.04,71.18-16.7,47.09-28.74,73.9-89.27,47.35-149.43Z"/>
+    <path fill="url(#linear-gradient-3)" stroke-width="0" d="m289.9,1747.65l262.77-125.82c16.12-7.72,33.56-11.59,51-11.61v-227.79l-431.01,358.71c31.9,20.42,76.49,26.02,117.24,6.51Z"/>
+    <path fill="url(#linear-gradient-4)" stroke-width="0" d="m603.67,687.36c-43.35.54-86.44,24.14-106.92,70.81l-366.43,835.09c-25.97,59.19-.39,118.6,45.24,147.81l428.11-356.33v-697.38Z"/>
+  </g>
+</svg>

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Liquid Glass in CSS &amp; SVG — Study 001 | Nordify</title>
+    <meta name="description" content="Apple-style liquid glass for the web: real refraction and reflection of the live page, built with an SVG displacement filter in CSS backdrop-filter. No WebGL." />
+    <meta name="author" content="Nordify" />
+    <meta name="theme-color" content="#eef2f6" />
+    <link rel="canonical" href="https://studies.nordify.io/study/001-liquid-glass/" />
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Nordify Studies" />
+    <meta property="og:title" content="Liquid Glass in CSS &amp; SVG — Study 001" />
+    <meta property="og:description" content="Real refraction and reflection of the live page with an SVG displacement filter in CSS backdrop-filter. No WebGL, no canvas." />
+    <meta property="og:url" content="https://studies.nordify.io/study/001-liquid-glass/" />
+    <meta property="og:image" content="https://studies.nordify.io/study/001-liquid-glass/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A liquid glass pill refracting the headline Liquid Glass" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "name": "Liquid Glass in CSS & SVG — Study 001",
+        "description": "Apple-style liquid glass for the web: real refraction and reflection of the live page, built with an SVG displacement filter in CSS backdrop-filter. No WebGL.",
+        "url": "https://studies.nordify.io/study/001-liquid-glass/",
+        "image": "https://studies.nordify.io/study/001-liquid-glass/og.jpg",
+        "inLanguage": "en",
+        "about": ["Liquid glass", "CSS backdrop-filter", "SVG feDisplacementMap", "Refraction"],
+        "isPartOf": { "@type": "WebSite", "name": "Nordify Studies", "url": "https://studies.nordify.io/" },
+        "publisher": { "@type": "Organization", "name": "Nordify", "url": "https://nordify.io", "logo": "https://nordify.io/logo.svg" }
+      }
+    </script>
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is liquid glass?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "A material look Apple introduced in 2025: translucent glass that bends and reflects whatever lies behind it. This study brings the effect to the web with standard CSS and SVG, so it works on top of any live page."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Which browsers support it?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Chrome, Edge, Arc, Brave and Opera show the full effect. Safari and Firefox do not run SVG filters inside backdrop-filter yet, so they get a clean frosted-glass fallback instead."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does it slow the page down?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "The expensive part happens once: the displacement maps are baked as small images and cached. While you scroll, the browser only re-runs the filter. Nothing is rebuilt, and the glass can change size without baking new maps."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Can I use it with React, Vue or Next.js?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. It is plain TypeScript that works on any DOM element, without dependencies. The repository includes a step-by-step porting guide written so that an AI assistant can follow it, too."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Who made this?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Nordify, a software studio in Hamburg. We build websites, apps and AI tools, and publish open studies like this one along the way. This is Study 001."
+            }
+          }
+        ]
+      }
+    </script>
+
+    <link rel="preload" href="/fonts/figtree-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/src/demo.css" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <header class="nav">
+      <a class="logo" href="https://nordify.io" aria-label="Nordify, software studio in Hamburg">
+        <img src="/logo.svg" alt="" width="23" height="25" />
+        <span>nordify<span class="dot">.</span></span>
+      </a>
+      <span class="nav-label">Liquid Glass | Study 001</span>
+    </header>
+
+    <main>
+      <div class="wrap">
+        <section class="hero">
+          <h1>Liquid Glass</h1>
+          <div class="ctas">
+            <a class="cta" href="https://github.com/nordify/css-liquid-glass">
+              Visit on GitHub
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4.5 11.5l7-7M5.5 4.5h6v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </a>
+            <a class="cta cta-brand" href="https://nordify.io">
+              Discover Nordify
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4.5 11.5l7-7M5.5 4.5h6v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </a>
+          </div>
+        </section>
+
+        <figure class="wide">
+          <video src="/video/gradient.mp4" poster="/video/gradient-poster.webp" preload="auto" autoplay muted loop playsinline aria-hidden="true"></video>
+          <span class="signature">Nordify</span>
+        </figure>
+
+        <section class="statement">
+          <h2>The most accurate liquid glass on the web</h2>
+        </section>
+
+        <figure class="pair">
+          <div class="cell">
+            <img src="/images/rings.webp" alt="Grainy concentric rings in blue, pink and orange" width="1414" height="2000" />
+            <span class="signature to-end" aria-hidden="true">Liq</span>
+          </div>
+          <div class="cell">
+            <img src="/images/blur.webp" alt="Soft blurred light in red, magenta and pale blue" width="1333" height="2000" />
+            <span class="signature to-start" aria-hidden="true">uid</span>
+          </div>
+        </figure>
+
+        <section class="statement">
+          <h2>Pure CSS, no WebGL</h2>
+        </section>
+      </div>
+
+      <section class="dark">
+        <div class="wrap">
+          <section class="statement">
+            <h2>Drop into any site</h2>
+          </section>
+
+          <figure class="pair">
+            <div class="cell">
+              <img src="/images/aura.webp" alt="Glowing gradient from deep red and blue into pink and yellow" width="1167" height="2000" />
+              <span class="signature to-end" aria-hidden="true">Liq</span>
+            </div>
+            <div class="cell">
+              <img src="/images/contours.webp" alt="Stepped contour bands from dark teal to pale peach" width="1414" height="2000" />
+              <span class="signature to-start" aria-hidden="true">uid</span>
+            </div>
+          </figure>
+
+          <section class="statement after-glass">
+            <h2>Open source. Ready to port.</h2>
+            <p>Three files, no dependencies. Copy them into any site or framework, call one function, and the element turns to glass.</p>
+            <pre><code><span class="k">import</span> { createLiquidGlass } <span class="k">from</span> "./glass/liquid-glass";
+
+createLiquidGlass(element, { radius: 30 });</code></pre>
+            <a class="cta cta-light" href="https://github.com/nordify/css-liquid-glass">
+              Try it out
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4.5 11.5l7-7M5.5 4.5h6v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </a>
+          </section>
+
+          <section class="faq">
+            <h2>Questions</h2>
+            <details>
+              <summary>What is liquid glass?</summary>
+              <p>A material look Apple introduced in 2025: translucent glass that bends and reflects whatever lies behind it. This study brings the effect to the web with standard CSS and SVG, so it works on top of any live page.</p>
+            </details>
+            <details>
+              <summary>Which browsers support it?</summary>
+              <p>Chrome, Edge, Arc, Brave and Opera show the full effect. Safari and Firefox do not run SVG filters inside <code>backdrop-filter</code> yet, so they get a clean frosted-glass fallback instead.</p>
+            </details>
+            <details>
+              <summary>Does it slow the page down?</summary>
+              <p>The expensive part happens once: the displacement maps are baked as small images and cached. While you scroll, the browser only re-runs the filter. Nothing is rebuilt, and the glass can change size without baking new maps.</p>
+            </details>
+            <details>
+              <summary>Can I use it with React, Vue or Next.js?</summary>
+              <p>Yes. It is plain TypeScript that works on any DOM element, without dependencies. The repository includes a step-by-step porting guide written so that an AI assistant can follow it, too.</p>
+            </details>
+            <details>
+              <summary>Who made this?</summary>
+              <p><a href="https://nordify.io">Nordify</a>, a software studio in Hamburg. We build websites, apps and AI tools, and publish open studies like this one along the way. This is Study 001.</p>
+            </details>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer dark">
+      <span>Study 001 by <a class="footer-nordify" href="https://nordify.io">Nordify<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4.5 11.5l7-7M5.5 4.5h6v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg></a></span>
+      <span class="footer-links"><a href="https://nordify.io/en/legal/imprint">Imprint</a><span class="license">MIT License</span></span>
+    </footer>
+
+    <div class="glass" aria-hidden="true"></div>
+  </body>
+</html>

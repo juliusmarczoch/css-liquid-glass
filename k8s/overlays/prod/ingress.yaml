@@ -1,0 +1,32 @@
+# Same setup as nordify.io: Let's Encrypt via cert-manager, Traefik behind
+# the Cloudflare proxy. "/" also goes here for now, nginx redirects the bare
+# domain to nordify.io; a later study gets its own, longer path.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: liquid-glass
+  namespace: liquid-glass
+  labels:
+    app.kubernetes.io/name: liquid-glass
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-production
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.middlewares: kube-system-cloudflare-chain@kubernetescrd
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: studies.nordify.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: liquid-glass
+                port:
+                  name: http
+  tls:
+    - hosts:
+        - studies.nordify.io
+      secretName: studies-nordify-io-tls

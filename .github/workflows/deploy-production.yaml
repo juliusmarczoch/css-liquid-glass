@@ -1,0 +1,96 @@
+name: Deploy production
+
+# Every push to main goes live on studies.nordify.io/study/001-liquid-glass/.
+# The secrets live in the "production" environment, which is limited to main
+# in the repository settings; pull requests never see them.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: liquid-glass-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check and build
+        run: npm run build
+
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build and push immutable image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker build --pull --tag "${image}:${GITHUB_SHA}" .
+          docker push "${image}:${GITHUB_SHA}"
+
+      - name: Install kustomize
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz"
+          tar -xzf /tmp/kustomize.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
+
+      - name: Render manifest
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          cd k8s/overlays/prod
+          kustomize edit set image "app-image=${image}:${GITHUB_SHA}"
+          kustomize build . > "${RUNNER_TEMP}/manifest.yaml"
+
+      # The key is pinned on the relay to /home/ci-deploy/bin/liquid-glass-deploy.sh
+      # (nordify/infra docs/app-onboarding.md § 6.1). CI never holds a
+      # kubeconfig; it can only hand a manifest to that script. Unlike the
+      # private app repos, host and host key are secrets, not a committed
+      # known_hosts and a variable: this repository and its logs are public.
+      - name: Deploy over SSH relay
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 0600 /dev/null "${RUNNER_TEMP}/deploy_key"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "${RUNNER_TEMP}/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "${RUNNER_TEMP}/known_hosts"
+          ssh -i "${RUNNER_TEMP}/deploy_key" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="${RUNNER_TEMP}/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "ci-deploy@${DEPLOY_HOST}" < "${RUNNER_TEMP}/manifest.yaml"

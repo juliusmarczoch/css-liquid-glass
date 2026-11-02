@@ -1,0 +1,65 @@
+# Platform-admin bootstrap for the "liquid-glass" namespace, following
+# nordify/infra docs/app-onboarding.md § 2. Applied once by hand from a
+# trusted admin machine (kubectl or Headlamp), never by CI: the deploy
+# credential may manage workloads in this namespace and nothing else.
+#
+#   kubectl apply -f k8s/bootstrap/namespace-rbac.yaml
+#   kubectl auth can-i patch deployments.apps --namespace=liquid-glass \
+#     --as=system:serviceaccount:liquid-glass:github-deployer   # expect: yes
+#   kubectl auth can-i get secrets --namespace=liquid-glass \
+#     --as=system:serviceaccount:liquid-glass:github-deployer   # expect: no
+#
+# Static nginx, no special Linux capabilities and no secrets: "restricted"
+# PSA, and no ESO access label.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: liquid-glass
+  labels:
+    app.kubernetes.io/part-of: applications
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: github-deployer
+  namespace: liquid-glass
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: application-deployer
+  namespace: liquid-glass
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "services", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: github-deployer
+  namespace: liquid-glass
+subjects:
+  - kind: ServiceAccount
+    name: github-deployer
+    namespace: liquid-glass
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: application-deployer
