@@ -50,6 +50,12 @@ const BAKE_SETTLE_MS = 650;
 const AVAIL_STEP = 8;
 /** Filter region margin around the box. */
 const REGION = 2;
+/* Resolution of the precomputed fields, relative to CSS pixels. Every image
+   in a backdrop filter is copied to the compositor with every frame, so the
+   fields are kept small: they are smooth, and the reflection's is blurred
+   afterwards anyway. */
+const FIELD_SCALE = 0.5;
+const REFLECT_FIELD_SCALE = 0.25;
 
 const REFR_CACHE = new Map<string, RefractionMap>();
 function cachedRefraction(short: number, radius: number) {
@@ -164,6 +170,119 @@ function layField(field: Field, tiles: Tiles, w: number, h: number, ox = 0, oy =
   }
 }
 
+/* --- Precomputed fields ---------------------------------------------------
+
+   The displacement field only depends on the size, yet the nine-slice graph
+   puts it together from some 35 primitives on every frame, and on a large
+   element that is most of the glass's GPU time. Under load such a frame
+   misses its deadline and Chromium shows it half drawn: the glass flickers.
+   So once the size has settled, the finished x and y fields are rendered
+   into two grey images, and a copy of the filter reads those instead of
+   building them: the same pixels from a handful of primitives. The
+   reflection's mask goes the same way. Grey, not packed colour, for the P3
+   reason in maps.ts. */
+
+type Box = { x: number; y: number; width: number; height: number };
+
+const boxOf = (f: SVGFilterElement): Box => ({
+  x: +f.getAttribute("x")!,
+  y: +f.getAttribute("y")!,
+  width: +f.getAttribute("width")!,
+  height: +f.getAttribute("height")!,
+});
+
+/** Renders the output of a filter that reads no backdrop, over `box`, into a PNG. */
+async function renderFilter(f: SVGFilterElement, box: Box, scale: number) {
+  const { x, y, width: w, height: h } = box;
+  f.id = "f";
+  const svg =
+    // Rendered at full size and scaled down by the canvas: where two tiles
+    // meet, a seam rendered small would stay as a visible line.
+    `<svg xmlns="${SVG_NS}" width="${w}" height="${h}" viewBox="${x} ${y} ${w} ${h}">` +
+    `${f.outerHTML}<rect x="${x}" y="${y}" width="${w}" height="${h}" filter="url(#f)"/></svg>`;
+  const img = new Image();
+  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  // onload, not decode(): decode() can hang on SVG images.
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = reject;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const url = canvas.toDataURL("image/png");
+  // Decoded before the filter uses it, so the first frame has the image.
+  await new Promise((resolve, reject) => {
+    const check = new Image();
+    check.onload = resolve;
+    check.onerror = reject;
+    check.src = url;
+  });
+  return url;
+}
+
+/** Renders the field `out` of a live filter over `box` into a grey PNG at `scale`. */
+function renderField(live: SVGFilterElement, out: string, cut: string, box: Box, scale: number) {
+  const f = live.cloneNode(true) as SVGFilterElement;
+  // Everything from the packing step on reads the backdrop; drop it and end
+  // the graph with the field itself.
+  const from = f.querySelector(`[result="${cut}"]`);
+  while (from?.nextSibling) from.nextSibling.remove();
+  from?.remove();
+  el(el(f, "feMerge"), "feMergeNode", { in: out });
+  return renderFilter(f, box, scale);
+}
+
+const image = (attrs: Record<string, string | number>) => {
+  const node = document.createElementNS(SVG_NS, "feImage");
+  for (const [k, v] of Object.entries({ preserveAspectRatio: "none", ...attrs })) node.setAttribute(k, String(v));
+  return node;
+};
+
+/** A static mask: the primitives that make it, and the box it covers. */
+type BakeMask = { result: string; parts: string[]; box: Box; scale: number };
+
+type BakeOptions = {
+  /** Where the field varies; the filter region by default. Outside it the
+   * image is absent, so the box must cover everything the output reads. */
+  box?: Box;
+  mask?: BakeMask;
+};
+
+/**
+ * A copy of `live` that starts at its packing step (`cut`) and reads the two
+ * fields from images; with `mask`, that mask too comes from one image instead
+ * of its parts. Replaces an earlier copy with the same id.
+ */
+async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask }: BakeOptions = {}) {
+  const isMask = (n: Element) => !!mask && [...mask.parts, mask.result].includes(n.getAttribute("result") ?? "");
+  const renderMask = () => {
+    const f = live.cloneNode(true) as SVGFilterElement;
+    for (const n of [...f.children]) if (!isMask(n)) n.remove();
+    return renderFilter(f, mask!.box, mask!.scale);
+  };
+  const [xUrl, yUrl, maskUrl] = await Promise.all([
+    renderField(live, xOut, cut, box, scale),
+    renderField(live, yOut, cut, box, scale),
+    mask ? renderMask() : "",
+  ]);
+  const f = live.cloneNode(true) as SVGFilterElement;
+  f.id = `${live.id}-baked`;
+  const from = f.querySelector(`[result="${cut}"]`)!;
+  while (from.previousSibling) from.previousSibling.remove();
+  f.insertBefore(image({ ...box, result: xOut, href: xUrl }), from);
+  f.insertBefore(image({ ...box, result: yOut, href: yUrl }), from);
+  if (mask) {
+    const parts = [...f.children].filter(isMask);
+    parts[parts.length - 1]!.after(image({ ...mask.box, result: mask.result, href: maskUrl }));
+    for (const n of parts) n.remove();
+  }
+  document.getElementById(f.id)?.remove();
+  live.after(f);
+  return f.id;
+}
+
 let instances = 0;
 
 /**
@@ -221,9 +340,23 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     y: -REGION,
   });
   const reflField = buildField(reflFilter, "f");
+  // Everything from here on only has to cover the outline (plus the blur's
+  // reach): the region is the whole overhang, which the mirror reads from,
+  // but a primitive's output is drawn at the size of its subregion, and
+  // these are the expensive ones. sync() keeps them to the box.
+  const reflTailFrom = reflFilter.children.length;
   const reflDisp = packField(reflFilter, "fx", "fy", "fmap");
   // A curved mirror compresses its image and loses angular resolution.
-  const reflBlur = el(reflFilter, "feGaussianBlur", { in: "bent" });
+  const reflBlur = el(reflFilter, "feGaussianBlur", { in: "bent", result: "fsoft" });
+  // Cut back to the shape here, not with a CSS mask: a mask is rasterised
+  // like content, and under load Chromium draws frames before it is, which
+  // drops the whole reflection for that frame. Where the filter leaves
+  // transparency, the page shows through unchanged.
+  const reflMask: Partial<Record<Slot, SVGFEImageElement>> = {};
+  for (const slot of SLOTS) reflMask[slot] = el(reflFilter, "feImage", { preserveAspectRatio: "none", result: `fm${slot}` });
+  const reflMaskMerge = el(reflFilter, "feMerge", { result: "fmask" });
+  for (const slot of SLOTS) el(reflMaskMerge, "feMergeNode", { in: `fm${slot}` });
+  el(reflFilter, "feComposite", { in: "fsoft", in2: "fmask", operator: "in" });
 
   /* --- The layers ---------------------------------------------------------
 
@@ -279,10 +412,13 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     const r = host.getBoundingClientRect();
     // Unrounded, unlike offsetLeft/offsetTop: a pixel off shows at the edge.
     const o = fixed ? { left: 0, top: 0 } : (host.offsetParent ?? document.body).getBoundingClientRect();
+    // Without the host's own translate: give the fill and the covers the same
+    // one (an animated translate, say) and they move along.
+    const [tx = 0, ty = 0] = cs.translate === "none" ? [] : cs.translate.split(" ").map(parseFloat);
     for (const el of [tick, ...covers]) {
       setStyle(el, "position", fixed ? "fixed" : "absolute");
-      setStyle(el, "left", `${r.left - o.left}px`);
-      setStyle(el, "top", `${r.top - o.top}px`);
+      setStyle(el, "left", `${r.left - o.left - tx}px`);
+      setStyle(el, "top", `${r.top - o.top - ty}px`);
       setStyle(el, "width", `${r.width}px`);
       setStyle(el, "height", `${r.height}px`);
     }
@@ -323,6 +459,8 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   let avail: ReflectAvail | null = null;
   let bakeTimer = 0;
   let viewTimer = 0;
+  let fieldTimer = 0;
+  let fieldKey = "";
   let lastSpot = "";
 
   const measureAvail = (): ReflectAvail => {
@@ -356,13 +494,16 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
       setAttr(reflDisp, "scale", reflectionScale(refl, w, h));
       setAttr(reflFilter, "width", w + pl + pr + REGION * 2);
       setAttr(reflFilter, "height", h + pt + pb + REGION * 2);
-      const rects = SLOTS.map((slot) => sliceRect(slot, w, h, refl!.mask.r, refl!.mask.reach, pl, pt));
-      const position = rects.map((r) => `${r.x}px ${r.y}px`).join(",");
-      const size = rects.map((r) => `${r.w}px ${r.h}px`).join(",");
-      setStyle(reflectLayer, "mask-position", position);
-      setStyle(reflectLayer, "-webkit-mask-position", position);
-      setStyle(reflectLayer, "mask-size", size);
-      setStyle(reflectLayer, "-webkit-mask-size", size);
+      const m = Math.ceil(3 * refl.blur) + REGION;
+      for (let i = reflTailFrom; i < reflFilter.children.length; i++)
+        setRect(reflFilter.children[i]!, { x: pl - m, y: pt - m, w: w + 2 * m, h: h + 2 * m });
+      for (const slot of SLOTS) {
+        const r = sliceRect(slot, w, h, refl.mask.r, refl.mask.reach, pl, pt);
+        // A pill has no straight sides: their tiles shrink to 0.01px, but
+        // an image is drawn at least a pixel wide, as a seam. Zero size
+        // disables the primitive.
+        setRect(reflMask[slot]!, r.w < 0.5 || r.h < 0.5 ? { ...r, w: 0, h: 0 } : r);
+      }
     }
 
     place();
@@ -370,11 +511,49 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     setStyle(glint, "--lg-arc-glint", arcs.glint);
     for (const c of covers) setStyle(c.querySelector<HTMLElement>(".lg-spec")!, "--lg-arc-glint", arcs.glint);
     setStyle(rimLayer, "--lg-arc-rim", arcs.rim);
+    scheduleFields();
+  };
+
+  /** Live graph while the size moves, precomputed fields once it settles. */
+  const useLiveFields = () => {
+    setBackdrop(pane, `url(#${refractId})${frost}`);
+    if (refl) setBackdrop(reflectLayer, `url(#${reflectId})`);
+  };
+  const scheduleFields = () => {
+    if (!refr) return;
+    const map = refl;
+    const key = `${w}x${h}:${map ? map.pad.join(",") : "-"}`;
+    if (key === fieldKey) return;
+    fieldKey = key;
+    useLiveFields();
+    clearTimeout(fieldTimer);
+    fieldTimer = window.setTimeout(async () => {
+      try {
+        const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", FIELD_SCALE);
+        let reflBaked = "";
+        if (map) {
+          const box = { x: map.pad[3], y: map.pad[0], width: w, height: h };
+          // The field is flat beyond the outline, and the mask discards all
+          // of it but the blur's reach into the box.
+          const m = Math.ceil(3 * map.blur) + REGION;
+          reflBaked = await bakeFilter(reflFilter, "fx", "fy", "fmapya", REFLECT_FIELD_SCALE, {
+            box: { x: box.x - m, y: box.y - m, width: box.width + 2 * m, height: box.height + 2 * m },
+            mask: { result: "fmask", parts: SLOTS.map((slot) => `fm${slot}`), box, scale: FIELD_SCALE },
+          });
+        }
+        if (key !== fieldKey) return; // the size moved on meanwhile
+        setBackdrop(pane, `url(#${refrBaked})${frost}`);
+        if (reflBaked) setBackdrop(reflectLayer, `url(#${reflBaked})`);
+      } catch {
+        // Canvas or SVG image unavailable: the live graph stays, it only costs more.
+      }
+    }, 300);
   };
 
   /** New reflection map: when the bake size or the free space around changes. */
   const rebuildReflection = () => {
     refl = reflect && avail ? buildReflection(reflSize.w, reflSize.h, radius, rim, reflectStrength, avail) : null;
+    fieldKey = "";
     reflectLayer.hidden = !refl;
     if (!refl) return;
 
@@ -382,23 +561,18 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     setAttr(reflBlur, "stdDeviation", refl.blur);
     const [pt, pr, pb, pl] = refl.pad;
     reflectLayer.style.inset = `${-pt}px ${-pr}px ${-pb}px ${-pl}px`;
-    // Same shape as the mask, as a plain compositor clip: it keeps the filter
-    // work to the outline instead of the whole overhang, and if the mask is
-    // not rasterised yet for one frame, the overhang still cannot flash.
+    // Same shape as the mask: keeps the filter work to the outline instead
+    // of the whole overhang.
     const clip = `inset(${pt}px ${pr}px ${pb}px ${pl}px round var(--lg-r))`;
     setStyle(reflectLayer, "clip-path", clip);
     setStyle(reflectLayer, "-webkit-clip-path", clip);
-    const images = SLOTS.map((slot) => {
-      const img = refl!.mask.img[slot]!;
-      return img.startsWith("linear-gradient(") ? img : `url("${img}")`;
-    }).join(",");
-    setStyle(reflectLayer, "mask-image", images);
-    setStyle(reflectLayer, "-webkit-mask-image", images);
+    for (const slot of SLOTS) setAttr(reflMask[slot]!, "href", refl.mask.img[slot]!);
     setBackdrop(reflectLayer, `url(#${reflectId})`);
   };
 
   const bake = (short: number) => {
     baked = short;
+    fieldKey = ""; // new tiles: the precomputed fields are stale
     refr = cachedRefraction(short, radius);
     setFieldImages(refrField, refr);
     for (const slot of SLOTS) setAttr(tiltTiles[slot]!, "href", refr.tilt.img[slot]!);
@@ -525,6 +699,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
       ro.disconnect();
       clearTimeout(bakeTimer);
       clearTimeout(viewTimer);
+      clearTimeout(fieldTimer);
       removeEventListener("scroll", onScroll);
       removeEventListener("resize", onView);
       host.querySelectorAll(":scope > .lg-layer, :scope > .lg-defs").forEach((n) => n.remove());

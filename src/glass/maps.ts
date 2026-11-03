@@ -99,7 +99,7 @@ const grayPng = (w: number, h: number, value: (x: number, y: number) => number) 
   return encodePng(w, h, 1, px);
 };
 
-/** White with an alpha channel, for CSS masks (which only read alpha). */
+/** White with an alpha channel, for masks (which only read alpha). */
 const maskPng = (w: number, h: number, alpha: (x: number, y: number) => number) => {
   const px = new Uint8Array(w * h * 2);
   for (let y = 0; y < h; y++)
@@ -377,7 +377,7 @@ const smootherstep = (t: number) => {
 export type ReflectionMap = {
   slice: Tiles;
   prod: Record<Axis, Record<Corner, string>>;
-  /** Fresnel weight as a nine-slice CSS mask (PNG corners, gradient edges). */
+  /** Fresnel weight as nine-slice alpha tiles, applied inside the filter. */
   mask: Tiles;
   /** Overhang of the layer: top, right, bottom, left. */
   pad: ReflectAvail;
@@ -390,7 +390,6 @@ export type ReflectionMap = {
 const WEDGES = 24;
 const CSTOPS = 28;
 const cornerAt = (i: number) => 1 - Math.pow(1 - i / CSTOPS, 1.7);
-const RSTOPS = 48;
 
 export const reflectionScale = (map: ReflectionMap, w: number, h: number) =>
   (map.scale / map.slice.r) * Math.max(0.01, Math.min(map.slice.r, w / 2, h / 2));
@@ -473,22 +472,16 @@ export function buildReflection(
     right: { gx: 1, gy: 0, at: (D: number) => [w - D, h / 2] as const },
   };
 
-  // Straight mask edges are plain CSS gradients: as stretched images inside a
-  // mask Chromium loses them.
   const maskEdge = (key: Edge) => {
     const def = edgeDefs[key];
     const flip = key === "bottom" || key === "right";
-    const stops: { o: number; wgt: number }[] = [];
-    for (let i = 0; i <= RSTOPS; i++) {
-      const f = i / RSTOPS;
+    const vertical = key === "top" || key === "bottom";
+    return maskPng(vertical ? 1 : LINE_TEX, vertical ? LINE_TEX : 1, (x, y) => {
+      const t = ((vertical ? y : x) + 0.5) / LINE_TEX;
+      const f = flip ? 1 - t : t;
       const [ex, ey] = def.at(f * maskReach);
-      stops.push({ o: flip ? 1 - f : f, wgt: weight(ex, ey, def.gx, def.gy, f * maskReach) });
-    }
-    stops.sort((a, b) => a.o - b.o);
-    const direction = key === "top" || key === "bottom" ? "to bottom" : "to right";
-    return `linear-gradient(${direction},${stops
-      .map(({ o, wgt }) => `rgb(255 255 255 / ${wgt.toFixed(4)}) ${(o * 100).toFixed(4)}%`)
-      .join(",")})`;
+      return weight(ex, ey, def.gx, def.gy, f * maskReach);
+    });
   };
 
   const maskDefs = {
@@ -498,8 +491,6 @@ export function buildReflection(
     bl: { a0: Math.PI / 2, cx: R, cy: 0, ecx: R, ecy: h - R },
   };
 
-  // A bitmap, not an SVG: an SVG mask image is re-laid out every time its
-  // size changes, a PNG is decoded once and stretched.
   const maskCorner = (key: Corner) => {
     const def = maskDefs[key];
     const wedgeStops: number[][] = [];

@@ -47,7 +47,9 @@ const fit = () => {
   // Measure the fixed spot again; park() puts it back if needed.
   parked = false;
   document.documentElement.classList.remove("parked");
-  park();
+  if (scrollCopy) parkScroll();
+  else park();
+  rangeCopies();
   shade();
 };
 
@@ -126,7 +128,47 @@ const fitCopies = () => {
 const COPY_EDGE = 0.15;
 const COPY_SHIFT = 0.4;
 const COPY_FADE = 0.5;
+// Where scroll-driven animations exist, the compositor runs the same curve
+// (demo.css); here only the scroll positions of each fade are worked out.
+const scrollCopy = CSS.supports("animation-timeline: scroll()");
+if (scrollCopy) {
+  document.documentElement.classList.add("scroll-copy");
+  for (const copy of copies) copy.style.removeProperty("opacity");
+}
+const copyKeys = document.createElement("style");
+document.head.append(copyKeys);
+const rangeCopies = () => {
+  if (!scrollCopy || parked) return;
+  const gh = glass.offsetHeight;
+  const top = fixedMid - gh / 2;
+  const edge = gh * COPY_EDGE;
+  const fade = gh * COPY_FADE;
+  const max = Math.max(1, document.documentElement.scrollHeight - document.documentElement.clientHeight);
+  const at = (y: number) => `${Math.min(100, Math.max(0, (y / max) * 100)).toFixed(4)}%`;
+  const shift = `${(gh * COPY_SHIFT).toFixed(1)}px`;
+  // The script version's curve, seen from either side: a quadratic ease-out
+  // coming in, its mirror going out.
+  const css = statements
+    .map((st, k) => {
+      const r = st.getBoundingClientRect();
+      // Scroll positions where the script version's t is 0 and 1.
+      const inStart = r.top + scrollY - top - edge - fade / 2;
+      const outStart = r.bottom + scrollY - (top + gh) + edge - fade / 2;
+      const hidden = (y: string) => `opacity: 0.001; translate: 0 ${y}`;
+      return (
+        `@keyframes copy-${k} {` +
+        `0%, ${at(inStart)} { ${hidden(shift)}; animation-timing-function: cubic-bezier(0.333, 0.667, 0.667, 1) }` +
+        `${at(inStart + fade)}, ${at(outStart)} { opacity: 1; translate: 0 0; animation-timing-function: cubic-bezier(0.333, 0, 0.667, 0.333) }` +
+        `${at(outStart + fade)}, 100% { ${hidden(`-${shift}`)} } }` +
+        `.scroll-copy .glass-copy:nth-child(${k + 1}) { animation-name: copy-${k} }`
+      );
+    })
+    .join("\n");
+  // Only on a real change: new keyframes restart the animations.
+  if (copyKeys.textContent !== css) copyKeys.textContent = css;
+};
 const showCopy = () => {
+  if (scrollCopy) return;
   const box = glass.getBoundingClientRect();
   const edge = box.height * COPY_EDGE;
   const mid = box.top + box.height / 2;
@@ -149,7 +191,24 @@ const showCopy = () => {
 // absolute happens at the same spot on screen, so nothing jumps.
 let fixedMid = 0;
 let parked = false;
+// Where scroll-driven animations exist, the compositor does it: the glass
+// stays fixed and, from the parking point on, is moved up exactly as far as
+// the page scrolls. The script version switches on a scroll event, and under
+// load that comes frames late: the glass overshoots and jumps back.
+const parkKeys = document.createElement("style");
+document.head.append(parkKeys);
+const parkScroll = () => {
+  fixedMid = glass.offsetTop + glass.offsetHeight / 2;
+  const from = stop.getBoundingClientRect().bottom + scrollY - fixedMid;
+  const max = Math.max(1, document.documentElement.scrollHeight - document.documentElement.clientHeight);
+  const at = Math.min(100, Math.max(0, (from / max) * 100));
+  const css =
+    `@keyframes park { 0%, ${at.toFixed(5)}% { translate: 0 0 } 100% { translate: 0 ${(-Math.max(0, max - from)).toFixed(2)}px } }` +
+    `.scroll-copy :is(.glass, .glass-text, .glass-tone, .lg-tick) { animation: park linear both; animation-timeline: scroll(root) }`;
+  if (parkKeys.textContent !== css) parkKeys.textContent = css;
+};
 const park = () => {
+  if (scrollCopy) return;
   if (!parked) {
     const box = glass.getBoundingClientRect();
     fixedMid = box.top + box.height / 2;
@@ -179,6 +238,11 @@ fit();
 park();
 showCopy();
 new ResizeObserver(fit).observe(title);
+// Images and fonts arriving later move the sections.
+new ResizeObserver(() => {
+  if (scrollCopy) parkScroll();
+  rangeCopies();
+}).observe(document.body);
 addEventListener("resize", fit);
 
 // The reflection reads up to 160px around the glass, but Chromium only

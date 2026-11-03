@@ -106,8 +106,6 @@
 .lg-reflect {
   z-index: 1;
   border-radius: 0;
-  mask-repeat: no-repeat;
-  -webkit-mask-repeat: no-repeat;
 }
 
 /* Light bundled under the lens. Blur outside, angular mask inside: filter

@@ -479,6 +479,17 @@ pre .k {
   text-wrap: balance;
 }
 
+/* Where the browser can, the compositor runs the fades against the scroll
+   position: scrolling and titles move in the same frame even when the main
+   thread lags. One animation per title over the whole page (keyframes from
+   main.ts), so it never finishes: a finished one has to be restarted by the
+   main thread when scrolled back into, and under load that stalls. */
+.scroll-copy .glass-copy {
+  will-change: opacity, translate;
+  animation: none linear both;
+  animation-timeline: scroll(root);
+}
+
 .glass-copy.on-dark {
   --fg: oklch(0.97 0.004 var(--hue));
 }
