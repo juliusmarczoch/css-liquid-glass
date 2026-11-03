@@ -50,6 +50,17 @@ const BAKE_SETTLE_MS = 650;
 const AVAIL_STEP = 8;
 /** Filter region margin around the box. */
 const REGION = 2;
+/* Least time between two redraws of the glass. Scroll events come once per
+   frame; 13 ms skips every other one at 120 Hz and none at 60 Hz. The glass
+   then trails the page by one frame at most, which is not visible in
+   motion, and its GPU work is halved just where the frames are shortest.
+   A frame that arrives late is a dropped frame, the GPU did not make it: for
+   a moment the gap grows, to 25 ms after one dropped frame, 50 ms after
+   three in a row. Fast scrolling hides the lag that costs. */
+const TICK_GAP_MS = [13, 25, 50];
+const TICK_HOLD_MS = 600;
+/** A frame this long after the last one is a pause, not a dropped frame. */
+const TICK_PAUSE_MS = 120;
 /* Resolution of the precomputed fields, relative to CSS pixels. Every image
    in a backdrop filter is copied to the compositor with every frame, so the
    fields are kept small: they are smooth, and the reflection's is blurred
@@ -647,8 +658,40 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   // outline. The reflection also reads the area around it, so while the page
   // scrolls past with nothing changing right underneath (one flat colour),
   // the reflection holds a stale picture and catches up in a jump: a flicker.
-  const refresh = () => {
+  // The fill changes in a frame callback, once per frame at most: two
+  // toggles in one frame would cancel out. A frame that comes too soon after
+  // the last redraw passes the toggle on to the next frame, so the last
+  // position of a scroll is always drawn.
+  let tickAt = -Infinity;
+  let tickReq = 0;
+  let frameAt = -Infinity;
+  // The display's frame time, learnt from the shortest gap seen; it creeps
+  // up so a move to a slower display is learnt too.
+  let frameMs = 50;
+  let gap = TICK_GAP_MS[0]!;
+  let gapUntil = -Infinity;
+  const applyTick = (now: number) => {
+    tickReq = 0;
+    const dt = now - frameAt;
+    frameAt = now;
+    if (dt < TICK_PAUSE_MS) {
+      frameMs = Math.min(Math.max(4, dt), frameMs * 1.02);
+      const level = dt >= 4 * frameMs + 2 ? 2 : dt >= 2 * frameMs + 2 ? 1 : 0;
+      if (level) {
+        gap = Math.max(gap, TICK_GAP_MS[level]!);
+        gapUntil = now + TICK_HOLD_MS;
+      }
+    }
+    if (now > gapUntil) gap = TICK_GAP_MS[0]!;
+    if (now - tickAt < gap) {
+      tickReq = requestAnimationFrame(applyTick);
+      return;
+    }
+    tickAt = now;
     tick.toggleAttribute("data-tick");
+  };
+  const refresh = () => {
+    if (!tickReq) tickReq = requestAnimationFrame(applyTick);
   };
   const onScroll = () => {
     if (refl) refresh();
@@ -700,6 +743,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
       clearTimeout(bakeTimer);
       clearTimeout(viewTimer);
       clearTimeout(fieldTimer);
+      cancelAnimationFrame(tickReq);
       removeEventListener("scroll", onScroll);
       removeEventListener("resize", onView);
       host.querySelectorAll(":scope > .lg-layer, :scope > .lg-defs").forEach((n) => n.remove());
