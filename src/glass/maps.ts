@@ -336,6 +336,9 @@ export function buildRefraction(short: number, radius: number): RefractionMap {
   };
 }
 
+/** Where the tilt fades in, as a share of the peak displacement. */
+const TILT_GATE = [0.2, 0.6] as const;
+
 /**
  * The finished refraction field for one `w` x `h` box, computed per texel
  * from the exact rounded rectangle instead of laid from tiles. The nine-slice
@@ -344,11 +347,12 @@ export function buildRefraction(short: number, radius: number): RefractionMap {
  * tilt and encoding as the live graph, for its feDisplacementMap `scale`.
  *
  * `box` is the area the images cover in the filter's user space, `res` their
- * texels per CSS px. Returns the x and y components as grey PNGs.
+ * texels per CSS px. Returns the field as one grey + alpha PNG: x in grey,
+ * y in alpha as a = 0.5 + 0.5y, which is what PACK_Y and the "in" composite
+ * make of the two in the live graph, so it goes straight into UNPACK. One
+ * image instead of two halves what feImage copies on every frame; grey and
+ * alpha are not colour-managed (see PACK_Y).
  */
-/** Where the tilt fades in, as a share of the peak displacement. */
-const TILT_GATE = [0.2, 0.6] as const;
-
 export function refractionField(map: RefractionMap, w: number, h: number, box: SliceRect, res: number) {
   const R = Math.max(0.01, Math.min(map.slice.r, w / 2, h / 2));
   const S = refractionScale(map, w, h);
@@ -381,8 +385,12 @@ export function refractionField(map: RefractionMap, w: number, h: number, box: S
       ys[j * tw + i] = (-P * vy) / dist;
     }
   }
-  const encode = (d: Float32Array) => grayPng(tw, th, (i, j) => 255 * (d[j * tw + i] / S + 0.5));
-  return { x: encode(xs), y: encode(ys), w: stretchWeight(xs, ys, tw, th, res) };
+  const px = new Uint8Array(tw * th * 2);
+  for (let k = 0; k < tw * th; k++) {
+    px[2 * k] = clamp255(255 * (xs[k] / S + 0.5));
+    px[2 * k + 1] = clamp255(255 * (0.75 + (0.5 * ys[k]) / S));
+  }
+  return { xy: encodePng(tw, th, 2, px), w: stretchWeight(xs, ys, tw, th, res) };
 }
 
 /** Texels of the field per texel of the stretch weight. The weight is smooth

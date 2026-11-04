@@ -72,11 +72,8 @@ const REFLECT_FIELD_SCALE = 0.25;
    half resolution the centre shows dashed lines along every horizontal
    edge (measured on the 1072 x 233 pill, Chromium 2x). */
 const REFRACT_FIELD_SCALE = 1;
-/** Blur of the backdrop the fold band reads, in CSS px. 1.5 left the fold
- *  striped at blur 0, 5 is calm. */
-const FOLD_PREBLUR = 0; // TEMP: pre-blur off for comparison, was 5
-/** Blur of the bent result in the same band, against the stairs of sampling. */
-const FOLD_POSTBLUR = 1.5;
+/** Blur of the bent picture where the field stretches it, in CSS px. */
+const FOLD_BLUR = 1.5;
 /* Weight of the blurred picture over the encoded displacement (0.5 = none,
    21 steps over 0..1): none where nothing is displaced, full from a
    twentieth of the range on. */
@@ -276,8 +273,9 @@ type BakeOptions = {
    * image is absent, so the box must cover everything the output reads. */
   box?: Box;
   mask?: BakeMask;
-  /** The x and y fields over `box`, already computed: nothing is rendered. */
-  fields?: { x: string; y: string; w?: string };
+  /** The packed field over `box`, already computed (refractionField): it
+   * replaces the packing step, and nothing is rendered. */
+  fields?: { xy: string; w?: string };
   /** With `fields.w`: the result that holds the blend weight in alpha. Its
    * primitive is replaced by the image, which carries the weight in grey. */
   weightOut?: string;
@@ -296,16 +294,24 @@ async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cu
     return renderFilter(f, mask!.box, mask!.scale);
   };
   const [xUrl, yUrl, maskUrl] = await Promise.all([
-    fields ? decoded(fields.x) : renderField(live, xOut, cut, box, scale),
-    fields ? decoded(fields.y) : renderField(live, yOut, cut, box, scale),
+    fields ? decoded(fields.xy) : renderField(live, xOut, cut, box, scale),
+    fields ? "" : renderField(live, yOut, cut, box, scale),
     mask ? renderMask() : "",
   ]);
   const f = live.cloneNode(true) as SVGFilterElement;
   f.id = `${live.id}-baked`;
   const from = f.querySelector(`[result="${cut}"]`)!;
   while (from.previousSibling) from.previousSibling.remove();
-  f.insertBefore(image({ ...box, result: xOut, href: xUrl }), from);
-  f.insertBefore(image({ ...box, result: yOut, href: yUrl }), from);
+  if (fields) {
+    // The image is what the packing makes: drop it, up to the matrix that
+    // reads its result.
+    const packed = from.nextElementSibling!.getAttribute("result")!;
+    from.nextElementSibling!.remove();
+    from.replaceWith(image({ ...box, result: packed, href: xUrl }));
+  } else {
+    f.insertBefore(image({ ...box, result: xOut, href: xUrl }), from);
+    f.insertBefore(image({ ...box, result: yOut, href: yUrl }), from);
+  }
   const weight = weightOut && fields?.w ? f.querySelector(`[result="${weightOut}"]`) : null;
   if (weight) {
     // Grey into alpha; the image is scaled up smoothly over the box.
@@ -438,21 +444,13 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   el(refrFilter, "feComposite", { in: "tmag", in2: "sfield", operator: "arithmetic", ...TILT_MULTIPLY, result: "tvec" });
   const tiltAdd = el(refrFilter, "feComposite", { in: "rx", in2: "tvec", operator: "arithmetic", k1: 0, k2: 1, result: "rxt" });
   const refrDisp = packField(refrFilter, "rxt", "ry", "rmap");
-  // Fold band anti-aliasing. feDisplacementMap samples the nearest pixel, and
-  // in the fold the profile squeezes about one radius of picture into a few
-  // pixels: without a prefilter it breaks into stripes. So a blurred copy of
-  // the backdrop is displaced as well and replaces the sharp one wherever
-  // the displacement is large, which is exactly the squeezed band. Where the
-  // glass does not displace (the 1:1 centre) the weight is 0 and the picture
-  // stays sharp.
-  el(refrFilter, "feGaussianBlur", { in: "SourceGraphic", stdDeviation: FOLD_PREBLUR, result: "rsrcsoft" });
-  const refrSoftDisp = el(refrFilter, "feDisplacementMap", {
-    in: "rsrcsoft",
-    in2: "rmap",
-    xChannelSelector: "R",
-    yChannelSelector: "G",
-    result: "bentsoft",
-  });
+  // Fold band anti-aliasing. feDisplacementMap samples the nearest pixel:
+  // where the glass squeezes the picture (the fold) that aliases into
+  // stripes, where it magnifies (just above) into stairs. A light blur of the
+  // bent result replaces it wherever the field stretches; the 1:1 centre
+  // keeps the sharp picture. A blurred backdrop, bent a second time, did not
+  // help against the stairs, which sampling makes after any prefilter, and
+  // cost a whole second displacement.
   const foldWeight = el(refrFilter, "feComponentTransfer", { in: "rmap", result: "rwab" });
   el(foldWeight, "feFuncR", { type: "table", tableValues: FOLD_WEIGHT });
   el(foldWeight, "feFuncG", { type: "table", tableValues: FOLD_WEIGHT });
@@ -460,17 +458,10 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   // The baked filter replaces this weight by one from the field's stretch
   // (refractionField), which also covers the magnified zone above the fold.
   el(refrFilter, "feColorMatrix", { in: "rwab", type: "matrix", values: "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 1 0 0 0", result: "rfold" });
+  el(refrFilter, "feGaussianBlur", { in: "bent", stdDeviation: FOLD_BLUR, result: "bentsoft" });
   el(refrFilter, "feComposite", { in: "bentsoft", in2: "rfold", operator: "in", result: "rsoftpart" });
   el(refrFilter, "feComposite", { in: "bent", in2: "rfold", operator: "out", result: "rsharppart" });
-  el(refrFilter, "feComposite", { in: "rsoftpart", in2: "rsharppart", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0, result: "rmix" });
-  // The prefilter cannot reach the stairs that sampling itself makes: where
-  // the source is sharp and neighbouring pixels read a few pixels apart, the
-  // jump happens after it. A light blur of the result, in the same band,
-  // smooths those; the centre stays untouched.
-  el(refrFilter, "feGaussianBlur", { in: "rmix", stdDeviation: FOLD_POSTBLUR, result: "rmixsoft" });
-  el(refrFilter, "feComposite", { in: "rmixsoft", in2: "rfold", operator: "in", result: "rpostsoft" });
-  el(refrFilter, "feComposite", { in: "rmix", in2: "rfold", operator: "out", result: "rpostsharp" });
-  el(refrFilter, "feComposite", { in: "rpostsoft", in2: "rpostsharp", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0 });
+  el(refrFilter, "feComposite", { in: "rsoftpart", in2: "rsharppart", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0 });
 
   const reflFilter = el(defs, "filter", {
     id: reflectId,
@@ -624,7 +615,6 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
       setAttr(tiltAdd, "k3", g);
       setAttr(tiltAdd, "k4", -g / 2);
       setAttr(refrDisp, "scale", refractionScale(refr, w, h));
-      setAttr(refrSoftDisp, "scale", refractionScale(refr, w, h));
       setAttr(refrFilter, "width", w + REGION * 2);
       setAttr(refrFilter, "height", h + REGION * 2);
     }
