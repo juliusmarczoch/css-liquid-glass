@@ -11,6 +11,7 @@ import {
   buildRefraction,
   reflectionPad,
   reflectionScale,
+  refractionField,
   refractionScale,
   sliceRect,
   tiltGain,
@@ -67,6 +68,17 @@ const TICK_PAUSE_MS = 120;
    afterwards anyway. */
 const FIELD_SCALE = 0.5;
 const REFLECT_FIELD_SCALE = 0.25;
+/* Full resolution for the refraction field, despite the per-frame copy: at
+   half resolution the centre shows dashed lines along every horizontal
+   edge (measured on the 1072 x 233 pill, Chromium 2x). */
+const REFRACT_FIELD_SCALE = 1;
+/** Blur of the backdrop the fold band reads, in CSS px. 1.5 left the fold
+ *  striped at blur 0, 5 is calm. */
+const FOLD_PREBLUR = 5;
+/* Weight of the blurred picture over the encoded displacement (0.5 = none,
+   21 steps over 0..1): none where nothing is displaced, full from a
+   twentieth of the range on. */
+const FOLD_WEIGHT = "1 1 1 1 1 1 1 1 1 1 0 1 1 1 1 1 1 1 1 1 1";
 
 const REFR_CACHE = new Map<string, RefractionMap>();
 function cachedRefraction(short: number, radius: number) {
@@ -222,8 +234,11 @@ async function renderFilter(f: SVGFilterElement, box: Box, scale: number) {
   canvas.width = Math.round(w * scale);
   canvas.height = Math.round(h * scale);
   canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const url = canvas.toDataURL("image/png");
-  // Decoded before the filter uses it, so the first frame has the image.
+  return decoded(canvas.toDataURL("image/png"));
+}
+
+/** Resolves once `url` is decoded, so the first frame that uses it has the image. */
+async function decoded(url: string) {
   await new Promise((resolve, reject) => {
     const check = new Image();
     check.onload = resolve;
@@ -259,6 +274,8 @@ type BakeOptions = {
    * image is absent, so the box must cover everything the output reads. */
   box?: Box;
   mask?: BakeMask;
+  /** The x and y fields over `box`, already computed: nothing is rendered. */
+  fields?: { x: string; y: string };
 };
 
 /**
@@ -266,7 +283,7 @@ type BakeOptions = {
  * fields from images; with `mask`, that mask too comes from one image instead
  * of its parts. Replaces an earlier copy with the same id.
  */
-async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask }: BakeOptions = {}) {
+async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask, fields }: BakeOptions = {}) {
   const isMask = (n: Element) => !!mask && [...mask.parts, mask.result].includes(n.getAttribute("result") ?? "");
   const renderMask = () => {
     const f = live.cloneNode(true) as SVGFilterElement;
@@ -274,8 +291,8 @@ async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cu
     return renderFilter(f, mask!.box, mask!.scale);
   };
   const [xUrl, yUrl, maskUrl] = await Promise.all([
-    renderField(live, xOut, cut, box, scale),
-    renderField(live, yOut, cut, box, scale),
+    fields ? decoded(fields.x) : renderField(live, xOut, cut, box, scale),
+    fields ? decoded(fields.y) : renderField(live, yOut, cut, box, scale),
     mask ? renderMask() : "",
   ]);
   const f = live.cloneNode(true) as SVGFilterElement;
@@ -294,6 +311,69 @@ async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cu
   return f.id;
 }
 
+/**
+ * The ring an edge layer's mask cuts, as one SVG image in device pixels:
+ * opaque up to `rimW` in from the outline, transparent from `fade` on. The
+ * same four side and four corner gradients as the CSS mask, but every piece
+ * boundary lies on a whole pixel and is drawn crisp, so neighbouring pieces
+ * neither leave a gap nor overlap.
+ */
+function ringMask(w: number, h: number, r: number, rimW: number, fade: number, dpr: number) {
+  const W = Math.max(1, Math.round(w * dpr));
+  const H = Math.max(1, Math.round(h * dpr));
+  const sx = W / w;
+  const sy = H / h;
+  const R = Math.min(r, w / 2, h / 2);
+  const d = Math.max(0.01, Math.min(fade, R));
+  const s = Math.min(1, rimW / d);
+  const bx = Math.min(Math.floor(W / 2), Math.round(R * sx));
+  const by = Math.min(Math.floor(H / 2), Math.round(R * sy));
+  const hx = Math.floor(W / 2);
+  const hy = Math.floor(H / 2);
+  const stops = (a: number, b: number) =>
+    `<stop offset="${a}" stop-opacity="${a === s ? 1 : 0}"/><stop offset="${b}" stop-opacity="${b === s ? 1 : 0}"/>`;
+  const linear = (id: string, x1: number, y1: number, x2: number, y2: number) =>
+    `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${stops(s, 1)}</linearGradient>`;
+  // Radial: transparent at depth `fade`, opaque from `rimW`, opaque beyond
+  // the arc too (pad), like the CSS gradient: the host's outline cuts there.
+  const radial = (id: string, cx: number, cy: number) =>
+    `<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${cx}" cy="${cy}" r="${R * sx}" gradientTransform="translate(${cx} ${cy}) scale(1 ${sy / sx}) translate(${-cx} ${-cy})">` +
+    `<stop offset="${(R - d) / R}" stop-opacity="0"/><stop offset="${(R - Math.min(rimW, d)) / R}" stop-opacity="1"/></radialGradient>`;
+  const rect = (x: number, y: number, rw: number, rh: number, fill: string) =>
+    rw > 0 && rh > 0 ? `<rect x="${x}" y="${y}" width="${rw}" height="${rh}" fill="url(#${fill})"/>` : "";
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" shape-rendering="crispEdges"><defs>` +
+    linear("t", 0, 0, 0, d * sy) +
+    linear("b", 0, H, 0, H - d * sy) +
+    linear("l", 0, 0, d * sx, 0) +
+    linear("r", W, 0, W - d * sx, 0) +
+    radial("ctl", R * sx, R * sy) +
+    radial("ctr", W - R * sx, R * sy) +
+    radial("cbr", W - R * sx, H - R * sy) +
+    radial("cbl", R * sx, H - R * sy) +
+    `</defs>` +
+    rect(bx, 0, W - 2 * bx, hy, "t") +
+    rect(bx, hy, W - 2 * bx, H - hy, "b") +
+    rect(0, by, hx, H - 2 * by, "l") +
+    rect(hx, by, W - hx, H - 2 * by, "r") +
+    rect(0, 0, bx, by, "ctl") +
+    rect(W - bx, 0, bx, by, "ctr") +
+    rect(W - bx, H - by, bx, by, "cbr") +
+    rect(0, H - by, bx, by, "cbl") +
+    `</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** The ring widths an edge layer resolves its CSS to, in CSS px. */
+function ringWidths(layerEl: HTMLElement) {
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;left:0;top:0;width:var(--w);height:var(--d);visibility:hidden";
+  layerEl.append(probe);
+  const r = probe.getBoundingClientRect();
+  probe.remove();
+  return { rimW: r.width, fade: r.height };
+}
+
 let instances = 0;
 
 /**
@@ -302,7 +382,7 @@ let instances = 0;
  * them. Size changes of the host are followed automatically.
  */
 export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions = {}) {
-  const { radius = 30, rim = 1.3, blur = 2, saturate = 1.1, reflect = true, reflectStrength = 2.5 } = options;
+  const { radius = 30, rim = 1.3, blur = 2.5, saturate = 1.1, reflect = true, reflectStrength = 2.5 } = options;
   const uid = ++instances;
   const refractId = `lg-refract-${uid}`;
   const reflectId = `lg-reflect-${uid}`;
@@ -342,6 +422,29 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   el(refrFilter, "feComposite", { in: "tmag", in2: "sfield", operator: "arithmetic", ...TILT_MULTIPLY, result: "tvec" });
   const tiltAdd = el(refrFilter, "feComposite", { in: "rx", in2: "tvec", operator: "arithmetic", k1: 0, k2: 1, result: "rxt" });
   const refrDisp = packField(refrFilter, "rxt", "ry", "rmap");
+  // Fold band anti-aliasing. feDisplacementMap samples the nearest pixel, and
+  // in the fold the profile squeezes about one radius of picture into a few
+  // pixels: without a prefilter it breaks into stripes. So a blurred copy of
+  // the backdrop is displaced as well and replaces the sharp one wherever
+  // the displacement is large, which is exactly the squeezed band. Where the
+  // glass does not displace (the 1:1 centre) the weight is 0 and the picture
+  // stays sharp.
+  el(refrFilter, "feGaussianBlur", { in: "SourceGraphic", stdDeviation: FOLD_PREBLUR, result: "rsrcsoft" });
+  const refrSoftDisp = el(refrFilter, "feDisplacementMap", {
+    in: "rsrcsoft",
+    in2: "rmap",
+    xChannelSelector: "R",
+    yChannelSelector: "G",
+    result: "bentsoft",
+  });
+  const foldWeight = el(refrFilter, "feComponentTransfer", { in: "rmap", result: "rwab" });
+  el(foldWeight, "feFuncR", { type: "table", tableValues: FOLD_WEIGHT });
+  el(foldWeight, "feFuncG", { type: "table", tableValues: FOLD_WEIGHT });
+  // Weight into alpha: x and y added, clamped to 1.
+  el(refrFilter, "feColorMatrix", { in: "rwab", type: "matrix", values: "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 1 0 0 0", result: "rfold" });
+  el(refrFilter, "feComposite", { in: "bentsoft", in2: "rfold", operator: "in", result: "rsoftpart" });
+  el(refrFilter, "feComposite", { in: "bent", in2: "rfold", operator: "out", result: "rsharppart" });
+  el(refrFilter, "feComposite", { in: "rsoftpart", in2: "rsharppart", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0 });
 
   const reflFilter = el(defs, "filter", {
     id: reflectId,
@@ -495,6 +598,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
       setAttr(tiltAdd, "k3", g);
       setAttr(tiltAdd, "k4", -g / 2);
       setAttr(refrDisp, "scale", refractionScale(refr, w, h));
+      setAttr(refrSoftDisp, "scale", refractionScale(refr, w, h));
       setAttr(refrFilter, "width", w + REGION * 2);
       setAttr(refrFilter, "height", h + REGION * 2);
     }
@@ -525,6 +629,33 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     scheduleFields();
   };
 
+  /* Ring masks follow the same rule as the fields: CSS tiles while the size
+     moves (a new image every frame would not be rasterised in time), one
+     image per edge layer once it settles. */
+  let ringKey = "";
+  const edgeLayers = () => [fold, glint, rimLayer, ...covers.map((c) => c.querySelector<HTMLElement>(".lg-spec")!)];
+  const clearRings = () => {
+    if (!ringKey) return;
+    ringKey = "";
+    for (const e of edgeLayers()) e.removeAttribute("data-ring");
+  };
+  const applyRings = async () => {
+    const key = `${w}x${h}@${devicePixelRatio}`;
+    if (key === ringKey) return;
+    const r = Math.max(0.01, Math.min(radius, w / 2, h / 2));
+    const jobs = edgeLayers().map(async (e) => {
+      const { rimW, fade } = ringWidths(e);
+      return { e, url: await decoded(ringMask(w, h, r, rimW, fade, devicePixelRatio)) };
+    });
+    const done = await Promise.all(jobs);
+    if (`${w}x${h}@${devicePixelRatio}` !== key) return;
+    ringKey = key;
+    for (const { e, url } of done) {
+      setStyle(e, "--lg-ring", `url("${url}")`);
+      e.setAttribute("data-ring", "");
+    }
+  };
+
   /** Live graph while the size moves, precomputed fields once it settles. */
   const useLiveFields = () => {
     setBackdrop(pane, `url(#${refractId})${frost}`);
@@ -533,14 +664,20 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   const scheduleFields = () => {
     if (!refr) return;
     const map = refl;
+    const field = refr;
     const key = `${w}x${h}:${map ? map.pad.join(",") : "-"}`;
     if (key === fieldKey) return;
     fieldKey = key;
     useLiveFields();
+    if (!ringKey.startsWith(`${w}x${h}@`)) clearRings();
     clearTimeout(fieldTimer);
     fieldTimer = window.setTimeout(async () => {
       try {
-        const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", FIELD_SCALE);
+        const region = { x: -REGION, y: -REGION, width: w + 2 * REGION, height: h + 2 * REGION };
+        const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", REFRACT_FIELD_SCALE, {
+          box: region,
+          fields: refractionField(field, w, h, { x: region.x, y: region.y, w: region.width, h: region.height }, REFRACT_FIELD_SCALE),
+        });
         let reflBaked = "";
         if (map) {
           const box = { x: map.pad[3], y: map.pad[0], width: w, height: h };
@@ -555,6 +692,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
         if (key !== fieldKey) return; // the size moved on meanwhile
         setBackdrop(pane, `url(#${refrBaked})${frost}`);
         if (reflBaked) setBackdrop(reflectLayer, `url(#${reflBaked})`);
+        await applyRings();
       } catch {
         // Canvas or SVG image unavailable: the live graph stays, it only costs more.
       }

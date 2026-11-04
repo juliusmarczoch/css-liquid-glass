@@ -175,6 +175,17 @@
   mask-composite: intersect, add, add, add, add, add, add, add, add;
 }
 
+/* Once the size has settled the ring comes from one image (ringMask in
+   liquid-glass.ts): the tiles above meet at fractional pixels, where both
+   are antialiased and their coverage no longer adds up to one, which shows
+   as a hairline across the rim at every tile boundary. */
+.lg-edge[data-ring] {
+  mask-image: var(--lg-arc), var(--lg-ring);
+  mask-size: auto, 100% 100%;
+  mask-position: 0 0, 0 0;
+  mask-composite: intersect, add;
+}
+
 /* The fold: brightens and saturates the whole folding band, not just the
    thin rim, so the folded image reads as the same material. */
 .lg-fold {

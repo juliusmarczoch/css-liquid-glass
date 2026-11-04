@@ -56,24 +56,32 @@ const chunk = (type: string, data: Uint8Array) => {
   return out;
 };
 
-/** `channels` 1 = grey, 2 = grey + alpha. A single stored block holds up to
- *  65535 bytes, which covers every tile built here. */
+/** `channels` 1 = grey, 2 = grey + alpha. Stored (uncompressed) deflate
+ *  blocks of at most 65535 bytes each. */
 function encodePng(w: number, h: number, channels: 1 | 2, pixels: Uint8Array) {
   const row = w * channels;
   const raw = new Uint8Array((row + 1) * h);
   for (let y = 0; y < h; y++) raw.set(pixels.subarray(y * row, (y + 1) * row), y * (row + 1) + 1);
 
   const len = raw.length;
-  const z = new Uint8Array(len + 11);
-  z.set([0x78, 0x01, 1, len & 255, len >>> 8, ~len & 255, (~len >>> 8) & 255]);
-  z.set(raw, 7);
+  const blocks = Math.max(1, Math.ceil(len / 65535));
+  const z = new Uint8Array(2 + blocks * 5 + len + 4);
+  z.set([0x78, 0x01]);
+  let at = 2;
+  for (let k = 0; k < blocks; k++) {
+    const part = raw.subarray(k * 65535, Math.min(len, (k + 1) * 65535));
+    const n = part.length;
+    z.set([k === blocks - 1 ? 1 : 0, n & 255, n >>> 8, ~n & 255, (~n >>> 8) & 255], at);
+    z.set(part, at + 5);
+    at += 5 + n;
+  }
   let a = 1;
   let b = 0;
   for (let i = 0; i < len; i++) {
     a = (a + raw[i]) % 65521;
     b = (b + a) % 65521;
   }
-  new DataView(z.buffer).setUint32(len + 7, ((b << 16) | a) >>> 0);
+  new DataView(z.buffer).setUint32(at, ((b << 16) | a) >>> 0);
 
   const ihdr = new Uint8Array(13);
   const hv = new DataView(ihdr.buffer);
@@ -217,12 +225,12 @@ export function sliceRect(slot: Slot, w: number, h: number, r: number, reach: nu
              softly capped so lines do not snap into stubs */
 
 const REFR_BAND = 0.39;
-const REFR_DEPTH = 0.49;
+const REFR_DEPTH = 0.5;
 const REFR_LIP_BAND = 0.3;
-const REFR_LIP = 10;
+const REFR_LIP = 5;
 const REFR_LIP_POW = 5;
 /** Stretches the whole profile; 1 is the measured width. */
-const REFR_WIDTH = 1;
+const REFR_WIDTH = 1.1;
 const REFR_REACH = 1.5;
 /** Extra pull towards the long axis' centre, so straight pill edges bend
  *  visibly. Not measured: a circle has no straight edge. 0 turns it off. */
@@ -323,6 +331,46 @@ export function buildRefraction(short: number, radius: number): RefractionMap {
     tiltRamp: (tiltRamp ??= lineTile(false, (f) => 255 * (1 - f))),
     gain: REFR_PEAK * REFR_HEAD,
   };
+}
+
+/**
+ * The finished refraction field for one `w` x `h` box, computed per texel
+ * from the exact rounded rectangle instead of laid from tiles. The nine-slice
+ * meets at seams where neighbouring tiles disagree by a texel, and those
+ * seams bend the image visibly ("cuts" at every tile boundary). Same profile,
+ * tilt and encoding as the live graph, for its feDisplacementMap `scale`.
+ *
+ * `box` is the area the images cover in the filter's user space, `res` their
+ * texels per CSS px. Returns the x and y components as grey PNGs.
+ */
+export function refractionField(map: RefractionMap, w: number, h: number, box: SliceRect, res: number) {
+  const R = Math.max(0.01, Math.min(map.slice.r, w / 2, h / 2));
+  const S = refractionScale(map, w, h);
+  const straight = Math.max(0, Math.min(1, (w / 2 - R) / R));
+  const run = w - 2 * R;
+  const tw = Math.max(1, Math.round(box.w * res));
+  const th = Math.max(1, Math.round(box.h * res));
+  const xs = new Float32Array(tw * th);
+  const ys = new Float32Array(tw * th);
+  for (let j = 0; j < th; j++) {
+    const py = box.y + ((j + 0.5) / th) * box.h;
+    for (let i = 0; i < tw; i++) {
+      const px = box.x + ((i + 0.5) / tw) * box.w;
+      // Nearest point of the inner rectangle: the arc centre in a corner,
+      // the foot on the edge line along a straight side.
+      const vx = px - Math.max(R, Math.min(w - R, px));
+      const vy = py - Math.max(R, Math.min(h - R, py));
+      const dist = Math.hypot(vx, vy);
+      if (dist < 1e-6) continue;
+      const P = refrProfile(Math.min(1, dist / R)) * R;
+      if (P === 0) continue;
+      const side = run > 1e-6 ? Math.max(-1, Math.min(1, 1 - (2 * (px - R)) / run)) : Math.sign(w / 2 - px);
+      xs[j * tw + i] = (-P * vx) / dist + REFR_TILT * straight * side * P;
+      ys[j * tw + i] = (-P * vy) / dist;
+    }
+  }
+  const encode = (d: Float32Array) => grayPng(tw, th, (i, j) => 255 * (d[j * tw + i] / S + 0.5));
+  return { x: encode(xs), y: encode(ys) };
 }
 
 /* --- Reflection ----------------------------------------------------------
