@@ -276,7 +276,10 @@ export type RefractionMap = {
 
 /** Multiplies two values encoded around 0.5: 0.5 + 2(a - 0.5)(b - 0.5). */
 export const TILT_MULTIPLY = { k1: 2, k2: -1, k3: -1, k4: 1 } as const;
-/** y field into alpha (a = 0.5 + 0.5y), so x can be masked by it with "in". */
+/** y field into alpha (a = 0.5 + 0.5y), so x can be masked by it with "in".
+ *  Maps stay grey + alpha until the last matrix: on a Display-P3 screen Chrome
+ *  colour-manages coloured filter values (feComposite arithmetic, feBlend),
+ *  which mixes G into R and bends the picture into an S. Costs y a bit. */
 export const PACK_Y = "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.5 0 0 0 0.5";
 /** R = x, G = 2a - 1 = y, B = 0, A = 1. Goes straight into feDisplacementMap. */
 export const UNPACK = "1 0 0 0 0  0 0 0 2 -1  0 0 0 0 0  0 0 0 0 1";
@@ -343,6 +346,9 @@ export function buildRefraction(short: number, radius: number): RefractionMap {
  * `box` is the area the images cover in the filter's user space, `res` their
  * texels per CSS px. Returns the x and y components as grey PNGs.
  */
+/** Where the tilt fades in, as a share of the peak displacement. */
+const TILT_GATE = [0.2, 0.6] as const;
+
 export function refractionField(map: RefractionMap, w: number, h: number, box: SliceRect, res: number) {
   const R = Math.max(0.01, Math.min(map.slice.r, w / 2, h / 2));
   const S = refractionScale(map, w, h);
@@ -365,12 +371,108 @@ export function refractionField(map: RefractionMap, w: number, h: number, box: S
       const P = refrProfile(Math.min(1, dist / R)) * R;
       if (P === 0) continue;
       const side = run > 1e-6 ? Math.max(-1, Math.min(1, 1 - (2 * (px - R)) / run)) : Math.sign(w / 2 - px);
-      xs[j * tw + i] = (-P * vx) / dist + REFR_TILT * straight * side * P;
+      // The tilt starts only deeper in the band (TILT_GATE): it is small and
+      // 8 bits wide, so where it fades out the field steps from 127 to 128
+      // in one row, and that row shows as a horizontal cut with the picture
+      // above it shifted sideways. Gated, that step lies where the picture
+      // is bent and softened anyway.
+      const g = Math.min(1, Math.max(0, (P / (R * REFR_MAG_PEAK) - TILT_GATE[0]) / (TILT_GATE[1] - TILT_GATE[0])));
+      xs[j * tw + i] = (-P * vx) / dist + REFR_TILT * straight * side * P * g * g * (3 - 2 * g);
       ys[j * tw + i] = (-P * vy) / dist;
     }
   }
   const encode = (d: Float32Array) => grayPng(tw, th, (i, j) => 255 * (d[j * tw + i] / S + 0.5));
-  return { x: encode(xs), y: encode(ys) };
+  return { x: encode(xs), y: encode(ys), w: stretchWeight(xs, ys, tw, th, res) };
+}
+
+/** Texels of the field per texel of the stretch weight. The weight is smooth
+ *  and only steers a blend, so it is stored small: feImage copies its bitmap
+ *  on every frame. */
+const STRETCH_CELL = 4;
+/** How far the mapping may scale the picture (singular value of its Jacobian
+ *  off 1) before the blurred copy starts to take over, and over what range it
+ *  fades in. Wide and eased: a short ramp shows as a line where the sharp
+ *  picture turns into the blurred one, which frost hides but blur 0 does not.
+ *  Below the onset the picture stays sharp: the gentle lens in the middle
+ *  magnifies a little everywhere. */
+const STRETCH_ONSET = 0.04;
+const STRETCH_RANGE = 0.5;
+
+/**
+ * Where the glass scales the picture, as a grey weight 0..1 for the blurred
+ * copy. feDisplacementMap samples the nearest pixel: where it squeezes (the
+ * fold) that aliases into stripes, where it magnifies (just above the fold)
+ * neighbouring rows read the same source row and the picture turns into
+ * stairs. Both are a singular value of the Jacobian of p -> p + d(p) away
+ * from 1; the weight is its largest deviation, averaged over each cell (a
+ * maximum would move the switch inwards and harden it).
+ */
+function stretchWeight(xs: Float32Array, ys: Float32Array, tw: number, th: number, res: number) {
+  const dev = new Float32Array(tw * th);
+  const at = (a: Float32Array, i: number, j: number) => a[Math.min(th - 1, Math.max(0, j)) * tw + Math.min(tw - 1, Math.max(0, i))];
+  for (let j = 0; j < th; j++)
+    for (let i = 0; i < tw; i++) {
+      // Derivatives per CSS px; the field holds px, the grid has `res` texels per px.
+      const a = 1 + ((at(xs, i + 1, j) - at(xs, i - 1, j)) * res) / 2;
+      const b = ((at(xs, i, j + 1) - at(xs, i, j - 1)) * res) / 2;
+      const c = ((at(ys, i + 1, j) - at(ys, i - 1, j)) * res) / 2;
+      const d = 1 + ((at(ys, i, j + 1) - at(ys, i, j - 1)) * res) / 2;
+      // Singular values of [[a b] [c d]].
+      const p = (a * a + b * b + c * c + d * d) / 2;
+      const q = Math.sqrt(Math.max(0, p * p - (a * d - b * c) ** 2));
+      const smax = Math.sqrt(p + q);
+      const smin = Math.sqrt(Math.max(0, p - q));
+      // Mirrored (the fold turns the picture over): blurred all the way. Its
+      // singular values pass 1 again where the mirror image is about 1:1,
+      // and without this the weight would drop to 0 there: a sharp gap
+      // between the stretch zone and the fold.
+      dev[j * tw + i] = a * d - b * c <= 0 ? Infinity : Math.max(smax - 1, 1 - smin);
+    }
+  const cw = Math.max(1, Math.ceil(tw / STRETCH_CELL));
+  const ch = Math.max(1, Math.ceil(th / STRETCH_CELL));
+  const cells = new Float32Array(cw * ch);
+  for (let cj = 0; cj < ch; cj++)
+    for (let ci = 0; ci < cw; ci++) {
+      let sum = 0;
+      let n = 0;
+      for (let j = cj * STRETCH_CELL; j < Math.min(th, (cj + 1) * STRETCH_CELL); j++)
+        for (let i = ci * STRETCH_CELL; i < Math.min(tw, (ci + 1) * STRETCH_CELL); i++) {
+          const t = Math.min(1, Math.max(0, (dev[j * tw + i] - STRETCH_ONSET) / STRETCH_RANGE));
+          sum += t * t * (3 - 2 * t);
+          n++;
+        }
+      cells[cj * cw + ci] = sum / n;
+    }
+  // The stretch rises within a few pixels, so the weight alone switches in
+  // one cell and shows as an edge where the blur starts. Fade it out inwards
+  // in space: a blurred copy, never below the weight itself.
+  const soft = blurCells(cells, cw, ch, (STRETCH_FADE * res) / STRETCH_CELL);
+  return grayPng(cw, ch, (ci, cj) => 255 * Math.max(cells[cj * cw + ci], Math.min(1, 2 * soft[cj * cw + ci])));
+}
+
+/** How far the blur fades out inwards from the band, in CSS px (sigma). */
+const STRETCH_FADE = 10;
+
+/** Separable Gaussian over a small grid, edges clamped. */
+function blurCells(src: Float32Array, w: number, h: number, sigma: number) {
+  const r = Math.max(1, Math.ceil(sigma * 3));
+  const k = Array.from({ length: 2 * r + 1 }, (_, i) => Math.exp(-((i - r) ** 2) / (2 * sigma * sigma)));
+  const norm = k.reduce((a, b) => a + b, 0);
+  const pass = (a: Float32Array, dx: number, dy: number) => {
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        let acc = 0;
+        for (let i = -r; i <= r; i++) {
+          const xx = Math.min(w - 1, Math.max(0, x + i * dx));
+          const yy = Math.min(h - 1, Math.max(0, y + i * dy));
+          acc += a[yy * w + xx] * k[i + r];
+        }
+        out[y * w + x] = acc / norm;
+      }
+    return out;
+  };
+  return pass(pass(src, 1, 0), 0, 1);
 }
 
 /* --- Reflection ----------------------------------------------------------

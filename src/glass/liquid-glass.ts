@@ -74,7 +74,9 @@ const REFLECT_FIELD_SCALE = 0.25;
 const REFRACT_FIELD_SCALE = 1;
 /** Blur of the backdrop the fold band reads, in CSS px. 1.5 left the fold
  *  striped at blur 0, 5 is calm. */
-const FOLD_PREBLUR = 5;
+const FOLD_PREBLUR = 0; // TEMP: pre-blur off for comparison, was 5
+/** Blur of the bent result in the same band, against the stairs of sampling. */
+const FOLD_POSTBLUR = 1.5;
 /* Weight of the blurred picture over the encoded displacement (0.5 = none,
    21 steps over 0..1): none where nothing is displaced, full from a
    twentieth of the range on. */
@@ -275,7 +277,10 @@ type BakeOptions = {
   box?: Box;
   mask?: BakeMask;
   /** The x and y fields over `box`, already computed: nothing is rendered. */
-  fields?: { x: string; y: string };
+  fields?: { x: string; y: string; w?: string };
+  /** With `fields.w`: the result that holds the blend weight in alpha. Its
+   * primitive is replaced by the image, which carries the weight in grey. */
+  weightOut?: string;
 };
 
 /**
@@ -283,7 +288,7 @@ type BakeOptions = {
  * fields from images; with `mask`, that mask too comes from one image instead
  * of its parts. Replaces an earlier copy with the same id.
  */
-async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask, fields }: BakeOptions = {}) {
+async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask, fields, weightOut }: BakeOptions = {}) {
   const isMask = (n: Element) => !!mask && [...mask.parts, mask.result].includes(n.getAttribute("result") ?? "");
   const renderMask = () => {
     const f = live.cloneNode(true) as SVGFilterElement;
@@ -301,6 +306,17 @@ async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cu
   while (from.previousSibling) from.previousSibling.remove();
   f.insertBefore(image({ ...box, result: xOut, href: xUrl }), from);
   f.insertBefore(image({ ...box, result: yOut, href: yUrl }), from);
+  const weight = weightOut && fields?.w ? f.querySelector(`[result="${weightOut}"]`) : null;
+  if (weight) {
+    // Grey into alpha; the image is scaled up smoothly over the box.
+    const w = image({ ...box, result: `${weightOut}img`, href: await decoded(fields!.w!) });
+    weight.before(w);
+    const old = weight.getAttribute("in");
+    weight.setAttribute("in", `${weightOut}img`);
+    // The live weight it read from, if nothing else reads it.
+    if (old && !f.querySelector(`[in="${old}"], [in2="${old}"]`)) f.querySelector(`[result="${old}"]`)?.remove();
+    weight.setAttribute("values", "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0");
+  }
   if (mask) {
     const parts = [...f.children].filter(isMask);
     parts[parts.length - 1]!.after(image({ ...mask.box, result: mask.result, href: maskUrl }));
@@ -441,10 +457,20 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   el(foldWeight, "feFuncR", { type: "table", tableValues: FOLD_WEIGHT });
   el(foldWeight, "feFuncG", { type: "table", tableValues: FOLD_WEIGHT });
   // Weight into alpha: x and y added, clamped to 1.
+  // The baked filter replaces this weight by one from the field's stretch
+  // (refractionField), which also covers the magnified zone above the fold.
   el(refrFilter, "feColorMatrix", { in: "rwab", type: "matrix", values: "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 1 0 0 0", result: "rfold" });
   el(refrFilter, "feComposite", { in: "bentsoft", in2: "rfold", operator: "in", result: "rsoftpart" });
   el(refrFilter, "feComposite", { in: "bent", in2: "rfold", operator: "out", result: "rsharppart" });
-  el(refrFilter, "feComposite", { in: "rsoftpart", in2: "rsharppart", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0 });
+  el(refrFilter, "feComposite", { in: "rsoftpart", in2: "rsharppart", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0, result: "rmix" });
+  // The prefilter cannot reach the stairs that sampling itself makes: where
+  // the source is sharp and neighbouring pixels read a few pixels apart, the
+  // jump happens after it. A light blur of the result, in the same band,
+  // smooths those; the centre stays untouched.
+  el(refrFilter, "feGaussianBlur", { in: "rmix", stdDeviation: FOLD_POSTBLUR, result: "rmixsoft" });
+  el(refrFilter, "feComposite", { in: "rmixsoft", in2: "rfold", operator: "in", result: "rpostsoft" });
+  el(refrFilter, "feComposite", { in: "rmix", in2: "rfold", operator: "out", result: "rpostsharp" });
+  el(refrFilter, "feComposite", { in: "rpostsoft", in2: "rpostsharp", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0 });
 
   const reflFilter = el(defs, "filter", {
     id: reflectId,
@@ -677,6 +703,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
         const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", REFRACT_FIELD_SCALE, {
           box: region,
           fields: refractionField(field, w, h, { x: region.x, y: region.y, w: region.width, h: region.height }, REFRACT_FIELD_SCALE),
+          weightOut: "rfold",
         });
         let reflBaked = "";
         if (map) {
