@@ -8,6 +8,7 @@ import {
   UNPACK,
   buildBevelArcs,
   buildReflection,
+  packedFieldPng,
   buildRefraction,
   reflectionPad,
   reflectionScale,
@@ -68,10 +69,13 @@ const TICK_PAUSE_MS = 120;
    afterwards anyway. */
 const FIELD_SCALE = 0.5;
 const REFLECT_FIELD_SCALE = 0.25;
-/* Full resolution for the refraction field, despite the per-frame copy: at
-   half resolution the centre shows dashed lines along every horizontal
-   edge (measured on the 1072 x 233 pill, Chromium 2x). */
-const REFRACT_FIELD_SCALE = 1;
+/* feImage uploads its bitmap on every frame, and on the large pill that
+   upload was most of the glass: 2.0 ms per frame at full resolution, 0.66
+   at half, 0.47 at a quarter (headful, vsync off, 2x). Half matches full
+   to 0.2 % of pixels at blur 0, only in the fold band; a quarter visibly
+   does not. The dashed lines half resolution once showed in the centre no
+   longer appear with the per-texel field. */
+const REFRACT_FIELD_SCALE = 0.5;
 /** Blur of the bent picture where the field stretches it, in CSS px. */
 const FOLD_BLUR = 1.5;
 /* Weight of the blurred picture over the encoded displacement (0.5 = none,
@@ -259,6 +263,28 @@ function renderField(live: SVGFilterElement, out: string, cut: string, box: Box,
   return renderFilter(f, box, scale);
 }
 
+/** Two grey field images of the same size as one packed grey + alpha PNG. */
+async function packImages(xUrl: string, yUrl: string) {
+  const read = async (url: string) => {
+    const img = new Image();
+    img.src = url;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext("2d")!;
+    g.drawImage(img, 0, 0);
+    // Opaque grey: read back exactly, R is the value.
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    return { w: c.width, h: c.height, v: Uint8Array.from({ length: c.width * c.height }, (_, k) => d[4 * k]!) };
+  };
+  const [x, y] = await Promise.all([read(xUrl), read(yUrl)]);
+  return decoded(packedFieldPng(x.w, x.h, x.v, y.v));
+}
+
 const image = (attrs: Record<string, string | number>) => {
   const node = document.createElementNS(SVG_NS, "feImage");
   for (const [k, v] of Object.entries({ preserveAspectRatio: "none", ...attrs })) node.setAttribute(k, String(v));
@@ -277,14 +303,16 @@ type BakeOptions = {
    * replaces the packing step, and nothing is rendered. */
   fields?: { xy: string; w?: string };
   /** With `fields.w`: the result that holds the blend weight in alpha. Its
-   * primitive is replaced by the image, which carries the weight in grey. */
+   * primitive is replaced by the image, which carries the weight in alpha. */
   weightOut?: string;
 };
 
 /**
- * A copy of `live` that starts at its packing step (`cut`) and reads the two
- * fields from images; with `mask`, that mask too comes from one image instead
- * of its parts. Replaces an earlier copy with the same id.
+ * A copy of `live` that starts after its packing step (`cut` and the
+ * composite after it) and reads the packed field from one image: one copy
+ * per frame instead of two, and two primitives less. With `mask`, that mask
+ * too comes from one image instead of its parts. Replaces an earlier copy
+ * with the same id.
  */
 async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask, fields, weightOut }: BakeOptions = {}) {
   const isMask = (n: Element) => !!mask && [...mask.parts, mask.result].includes(n.getAttribute("result") ?? "");
@@ -293,35 +321,27 @@ async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cu
     for (const n of [...f.children]) if (!isMask(n)) n.remove();
     return renderFilter(f, mask!.box, mask!.scale);
   };
-  const [xUrl, yUrl, maskUrl] = await Promise.all([
-    fields ? decoded(fields.xy) : renderField(live, xOut, cut, box, scale),
-    fields ? "" : renderField(live, yOut, cut, box, scale),
+  const [xyUrl, maskUrl] = await Promise.all([
+    fields ? decoded(fields.xy) : Promise.all([renderField(live, xOut, cut, box, scale), renderField(live, yOut, cut, box, scale)]).then(([x, y]) => packImages(x, y)),
     mask ? renderMask() : "",
   ]);
   const f = live.cloneNode(true) as SVGFilterElement;
   f.id = `${live.id}-baked`;
   const from = f.querySelector(`[result="${cut}"]`)!;
   while (from.previousSibling) from.previousSibling.remove();
-  if (fields) {
-    // The image is what the packing makes: drop it, up to the matrix that
-    // reads its result.
-    const packed = from.nextElementSibling!.getAttribute("result")!;
-    from.nextElementSibling!.remove();
-    from.replaceWith(image({ ...box, result: packed, href: xUrl }));
-  } else {
-    f.insertBefore(image({ ...box, result: xOut, href: xUrl }), from);
-    f.insertBefore(image({ ...box, result: yOut, href: yUrl }), from);
-  }
+  // The image is what the packing makes: drop it, up to the matrix that
+  // reads its result.
+  const packed = from.nextElementSibling!.getAttribute("result")!;
+  from.nextElementSibling!.remove();
+  from.replaceWith(image({ ...box, result: packed, href: xyUrl }));
   const weight = weightOut && fields?.w ? f.querySelector(`[result="${weightOut}"]`) : null;
   if (weight) {
-    // Grey into alpha; the image is scaled up smoothly over the box.
-    const w = image({ ...box, result: `${weightOut}img`, href: await decoded(fields!.w!) });
-    weight.before(w);
+    // The image carries the weight in alpha and replaces the primitive that
+    // made it; scaled up smoothly over the box.
     const old = weight.getAttribute("in");
-    weight.setAttribute("in", `${weightOut}img`);
+    weight.replaceWith(image({ ...box, result: weightOut!, href: await decoded(fields!.w!) }));
     // The live weight it read from, if nothing else reads it.
     if (old && !f.querySelector(`[in="${old}"], [in2="${old}"]`)) f.querySelector(`[result="${old}"]`)?.remove();
-    weight.setAttribute("values", "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 0 0 0 0");
   }
   if (mask) {
     const parts = [...f.children].filter(isMask);
@@ -458,10 +478,15 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   // The baked filter replaces this weight by one from the field's stretch
   // (refractionField), which also covers the magnified zone above the fold.
   el(refrFilter, "feColorMatrix", { in: "rwab", type: "matrix", values: "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 1 0 0 0", result: "rfold" });
-  el(refrFilter, "feGaussianBlur", { in: "bent", stdDeviation: FOLD_BLUR, result: "bentsoft" });
+  // Edges duplicated, so the blurred copy stays opaque up to the region's
+  // border and can simply be laid over the sharp one: two primitives less
+  // than adding it to the sharp one "out" the weight, which measured as a
+  // third of the dropped frames while scrolling.
+  el(refrFilter, "feGaussianBlur", { in: "bent", stdDeviation: FOLD_BLUR, edgeMode: "duplicate", result: "bentsoft" });
   el(refrFilter, "feComposite", { in: "bentsoft", in2: "rfold", operator: "in", result: "rsoftpart" });
-  el(refrFilter, "feComposite", { in: "bent", in2: "rfold", operator: "out", result: "rsharppart" });
-  el(refrFilter, "feComposite", { in: "rsoftpart", in2: "rsharppart", operator: "arithmetic", k1: 0, k2: 1, k3: 1, k4: 0 });
+  const foldMix = el(refrFilter, "feMerge", {});
+  el(foldMix, "feMergeNode", { in: "bent" });
+  el(foldMix, "feMergeNode", { in: "rsoftpart" });
 
   const reflFilter = el(defs, "filter", {
     id: reflectId,

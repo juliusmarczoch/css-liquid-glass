@@ -281,6 +281,16 @@ export const TILT_MULTIPLY = { k1: 2, k2: -1, k3: -1, k4: 1 } as const;
  *  colour-manages coloured filter values (feComposite arithmetic, feBlend),
  *  which mixes G into R and bends the picture into an S. Costs y a bit. */
 export const PACK_Y = "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.5 0 0 0 0.5";
+/** Grey x and y (0..255 each) as one grey + alpha PNG in the form PACK_Y and
+ *  the "in" composite make of them: x in grey, y in alpha. */
+export function packedFieldPng(w: number, h: number, x: ArrayLike<number>, y: ArrayLike<number>) {
+  const px = new Uint8Array(w * h * 2);
+  for (let k = 0; k < w * h; k++) {
+    px[2 * k] = clamp255(x[k]!);
+    px[2 * k + 1] = clamp255(127.5 + y[k]! / 2);
+  }
+  return encodePng(w, h, 2, px);
+}
 /** R = x, G = 2a - 1 = y, B = 0, A = 1. Goes straight into feDisplacementMap. */
 export const UNPACK = "1 0 0 0 0  0 0 0 2 -1  0 0 0 0 0  0 0 0 0 1";
 
@@ -385,12 +395,8 @@ export function refractionField(map: RefractionMap, w: number, h: number, box: S
       ys[j * tw + i] = (-P * vy) / dist;
     }
   }
-  const px = new Uint8Array(tw * th * 2);
-  for (let k = 0; k < tw * th; k++) {
-    px[2 * k] = clamp255(255 * (xs[k] / S + 0.5));
-    px[2 * k + 1] = clamp255(255 * (0.75 + (0.5 * ys[k]) / S));
-  }
-  return { xy: encodePng(tw, th, 2, px), w: stretchWeight(xs, ys, tw, th, res) };
+  const enc = (d: Float32Array) => Float32Array.from(d, (v) => 255 * (v / S + 0.5));
+  return { xy: packedFieldPng(tw, th, enc(xs), enc(ys)), w: stretchWeight(xs, ys, tw, th, res) };
 }
 
 /** Texels of the field per texel of the stretch weight. The weight is smooth
@@ -407,7 +413,7 @@ const STRETCH_ONSET = 0.04;
 const STRETCH_RANGE = 0.5;
 
 /**
- * Where the glass scales the picture, as a grey weight 0..1 for the blurred
+ * Where the glass scales the picture, as a weight 0..1 in alpha for the blurred
  * copy. feDisplacementMap samples the nearest pixel: where it squeezes (the
  * fold) that aliases into stripes, where it magnifies (just above the fold)
  * neighbouring rows read the same source row and the picture turns into
@@ -455,7 +461,7 @@ function stretchWeight(xs: Float32Array, ys: Float32Array, tw: number, th: numbe
   // one cell and shows as an edge where the blur starts. Fade it out inwards
   // in space: a blurred copy, never below the weight itself.
   const soft = blurCells(cells, cw, ch, (STRETCH_FADE * res) / STRETCH_CELL);
-  return grayPng(cw, ch, (ci, cj) => 255 * Math.max(cells[cj * cw + ci], Math.min(1, 2 * soft[cj * cw + ci])));
+  return maskPng(cw, ch, (ci, cj) => Math.max(cells[cj * cw + ci], Math.min(1, 2 * soft[cj * cw + ci])));
 }
 
 /** How far the blur fades out inwards from the band, in CSS px (sigma). */
