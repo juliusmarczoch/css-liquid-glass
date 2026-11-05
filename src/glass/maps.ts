@@ -408,13 +408,15 @@ export function refractionField(map: RefractionMap, w: number, h: number, box: S
    feImage copies its bitmap on every frame, so the fields stay as small as
    the shape allows. Across the short side lives the rim profile, a steep
    step a few px wide: that side keeps at least FIELD_TEXELS texels, full
-   resolution on a small element, half on a large one. Along the long side
-   the field is linear over the straight run (the tilt ramp, which bilinear
-   scaling reproduces exactly) and bends only in the caps: a quarter of the
-   other side, but at least CAP_TEXELS texels per cap. The reflection field
-   is blurred afterwards and needs less, REFL_TEXELS across. */
-const FIELD_TEXELS = 64;
-const CAP_TEXELS = 12;
+   resolution on a small element, never under half on a large one. Along
+   the long side the field is linear over the straight run (the tilt ramp,
+   which bilinear scaling reproduces exactly) and bends only in the caps: a
+   quarter of the other side, but at least CAP_TEXELS texels per cap. The
+   reflection field is blurred afterwards and needs less, REFL_TEXELS
+   across. A 62 px pill keeps full resolution across and about half along
+   (83 x 66 texels), a 233 px pill 0.55 across and 0.14 along (148 x 130). */
+const FIELD_TEXELS = 128;
+const CAP_TEXELS = 16;
 const REFL_TEXELS = 32;
 
 /** Texels per CSS px of the baked fields for a w x h box with corner radius
