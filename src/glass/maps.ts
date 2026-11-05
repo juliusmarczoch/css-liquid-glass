@@ -415,8 +415,8 @@ export function refractionField(map: RefractionMap, w: number, h: number, box: S
    reflection field is blurred afterwards and needs less, REFL_TEXELS
    across. A 62 px pill keeps full resolution across and about half along
    (83 x 66 texels), a 233 px pill 0.55 across and 0.14 along (148 x 130). */
-const FIELD_TEXELS = 128;
-const CAP_TEXELS = 16;
+const FIELD_TEXELS = 96;
+const CAP_TEXELS = 14;
 const REFL_TEXELS = 32;
 
 /** Texels per CSS px of the baked fields for a w x h box with corner radius
