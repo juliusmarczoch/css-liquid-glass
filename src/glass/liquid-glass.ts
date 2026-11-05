@@ -24,6 +24,7 @@ import {
   type SliceRect,
   type Slot,
   type Tiles,
+  fieldScales,
 } from "./maps";
 import "./liquid-glass.css";
 
@@ -76,20 +77,9 @@ const TICK_PAUSE_MS = 120;
    in a backdrop filter is copied to the compositor with every frame, so the
    fields are kept small: they are smooth, and the reflection's is blurred
    afterwards anyway. */
+/** Resolution of the baked masks (the ring, the reflection's mask). The
+ *  fields pick theirs by shape and size: fieldScales in maps.ts. */
 const FIELD_SCALE = 0.5;
-const REFLECT_FIELD_SCALE = 0.25;
-/* feImage uploads its bitmap on every frame, and on the large pill that
-   upload was most of the glass: 2.0 ms per frame at full resolution, 0.66
-   at half, 0.47 at a quarter (headful, vsync off, 2x). Half matches full
-   to 0.2 % of pixels at blur 0, only in the fold band; a quarter visibly
-   does not. The dashed lines half resolution once showed in the centre no
-   longer appear with the per-texel field. */
-const REFRACT_FIELD_SCALE = 0.5;
-/* Across the field coarser still: along the straight run it is linear in x
-   (the tilt ramp), which bilinear scaling reproduces exactly, and the caps
-   are smooth. An eighth matches half to 0.06-0.26 % of pixels at blur 0 and
-   takes the glass from 0.69 to 0.44 ms per frame. */
-const REFRACT_FIELD_SCALE_X = 0.125;
 /** What `promote: true` lifts into a layer of its own. */
 const PROMOTE_DEFAULT = "main";
 
@@ -730,12 +720,13 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
       pendRefr = pendRefl = false;
       const field = refr!;
       const map = refl;
+      const res = fieldScales(w, h, Math.min(field.slice.r, w / 2, h / 2));
       try {
         if (doRefr) {
           const region = { x: -REGION, y: -REGION, width: w + 2 * REGION, height: h + 2 * REGION };
-          const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", REFRACT_FIELD_SCALE, {
+          const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", res.y, {
             box: region,
-            fields: refractionField(field, w, h, { x: region.x, y: region.y, w: region.width, h: region.height }, REFRACT_FIELD_SCALE, REFRACT_FIELD_SCALE_X),
+            fields: refractionField(field, w, h, { x: region.x, y: region.y, w: region.width, h: region.height }, res.y, res.x),
           });
           if (rKey === refrKey) {
             // Still the size it was baked for.
@@ -749,7 +740,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
           // of it but the blur's reach into the box.
           const m = Math.ceil(3 * map.blur) + REGION;
           const mask: BakeMask = { result: "fmask", parts: SLOTS.map((slot) => `fm${slot}`), box, scale: FIELD_SCALE };
-          const reflBaked = await bakeFilter(reflFilter, "fx", "fy", "fmapya", REFLECT_FIELD_SCALE, {
+          const reflBaked = await bakeFilter(reflFilter, "fx", "fy", "fmapya", res.refl, {
             box: { x: box.x - m, y: box.y - m, width: box.width + 2 * m, height: box.height + 2 * m },
             mask,
           });

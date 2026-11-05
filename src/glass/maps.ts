@@ -404,6 +404,29 @@ export function refractionField(map: RefractionMap, w: number, h: number, box: S
   return { xy: packedFieldPng(tw, th, enc(xs), enc(ys)) };
 }
 
+/* --- Resolution of the baked fields -----------------------------------
+   feImage copies its bitmap on every frame, so the fields stay as small as
+   the shape allows. Across the short side lives the rim profile, a steep
+   step a few px wide: that side keeps at least FIELD_TEXELS texels, full
+   resolution on a small element, half on a large one. Along the long side
+   the field is linear over the straight run (the tilt ramp, which bilinear
+   scaling reproduces exactly) and bends only in the caps: a quarter of the
+   other side, but at least CAP_TEXELS texels per cap. The reflection field
+   is blurred afterwards and needs less, REFL_TEXELS across. */
+const FIELD_TEXELS = 64;
+const CAP_TEXELS = 12;
+const REFL_TEXELS = 32;
+
+/** Texels per CSS px of the baked fields for a w x h box with corner radius
+ *  r: `x` and `y` for the refraction field, `refl` for the reflection's. */
+export function fieldScales(w: number, h: number, r: number) {
+  const short = Math.max(1, Math.min(w, h));
+  const fine = Math.min(1, Math.max(0.5, FIELD_TEXELS / short));
+  const coarse = Math.min(fine, Math.max(fine / 4, CAP_TEXELS / Math.max(1, r)));
+  const refl = Math.min(0.5, Math.max(0.25, REFL_TEXELS / short));
+  return w >= h ? { x: coarse, y: fine, refl } : { x: fine, y: coarse, refl };
+}
+
 /* --- Reflection ----------------------------------------------------------
 
    The part of the light that never enters the glass: it pulls in what sits
