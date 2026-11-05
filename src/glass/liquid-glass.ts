@@ -39,6 +39,15 @@ export type LiquidGlassOptions = {
   reflect?: boolean;
   /** 1 is physical Fresnel; higher only raises the level. Default 2.5. */
   reflectStrength?: number;
+  /**
+   * Puts the page's scrolling content into a compositor layer of its own
+   * (will-change: transform) through a stylesheet the glass injects once.
+   * Without it Chromium does not raster the page in time during a fast
+   * fling and shows it cut off: the glass's backdrop filters take the GPU
+   * time the tiles would need. true for `main`, or a selector of your own;
+   * false leaves the page alone. Default true.
+   */
+  promote?: boolean | string;
 };
 
 /* Rebake only when the short side moves clearly away from the baked one.
@@ -76,12 +85,13 @@ const REFLECT_FIELD_SCALE = 0.25;
    does not. The dashed lines half resolution once showed in the centre no
    longer appear with the per-texel field. */
 const REFRACT_FIELD_SCALE = 0.5;
-/** Blur of the bent picture where the field stretches it, in CSS px. */
-const FOLD_BLUR = 1.5;
-/* Weight of the blurred picture over the encoded displacement (0.5 = none,
-   21 steps over 0..1): none where nothing is displaced, full from a
-   twentieth of the range on. */
-const FOLD_WEIGHT = "1 1 1 1 1 1 1 1 1 1 0 1 1 1 1 1 1 1 1 1 1";
+/* Across the field coarser still: along the straight run it is linear in x
+   (the tilt ramp), which bilinear scaling reproduces exactly, and the caps
+   are smooth. An eighth matches half to 0.06-0.26 % of pixels at blur 0 and
+   takes the glass from 0.69 to 0.44 ms per frame. */
+const REFRACT_FIELD_SCALE_X = 0.125;
+/** What `promote: true` lifts into a layer of its own. */
+const PROMOTE_DEFAULT = "main";
 
 const REFR_CACHE = new Map<string, RefractionMap>();
 function cachedRefraction(short: number, radius: number) {
@@ -301,10 +311,7 @@ type BakeOptions = {
   mask?: BakeMask;
   /** The packed field over `box`, already computed (refractionField): it
    * replaces the packing step, and nothing is rendered. */
-  fields?: { xy: string; w?: string };
-  /** With `fields.w`: the result that holds the blend weight in alpha. Its
-   * primitive is replaced by the image, which carries the weight in alpha. */
-  weightOut?: string;
+  fields?: { xy: string };
 };
 
 /**
@@ -314,16 +321,19 @@ type BakeOptions = {
  * too comes from one image instead of its parts. Replaces an earlier copy
  * with the same id.
  */
-async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask, fields, weightOut }: BakeOptions = {}) {
+/** Renders a static mask of `live` (its parts alone) over its box into a PNG. */
+function renderMask(live: SVGFilterElement, mask: BakeMask) {
+  const names = [...mask.parts, mask.result];
+  const f = live.cloneNode(true) as SVGFilterElement;
+  for (const n of [...f.children]) if (!names.includes(n.getAttribute("result") ?? "")) n.remove();
+  return renderFilter(f, mask.box, mask.scale);
+}
+
+async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cut: string, scale: number, { box = boxOf(live), mask, fields }: BakeOptions = {}) {
   const isMask = (n: Element) => !!mask && [...mask.parts, mask.result].includes(n.getAttribute("result") ?? "");
-  const renderMask = () => {
-    const f = live.cloneNode(true) as SVGFilterElement;
-    for (const n of [...f.children]) if (!isMask(n)) n.remove();
-    return renderFilter(f, mask!.box, mask!.scale);
-  };
   const [xyUrl, maskUrl] = await Promise.all([
     fields ? decoded(fields.xy) : Promise.all([renderField(live, xOut, cut, box, scale), renderField(live, yOut, cut, box, scale)]).then(([x, y]) => packImages(x, y)),
-    mask ? renderMask() : "",
+    mask ? renderMask(live, mask) : "",
   ]);
   const f = live.cloneNode(true) as SVGFilterElement;
   f.id = `${live.id}-baked`;
@@ -334,15 +344,6 @@ async function bakeFilter(live: SVGFilterElement, xOut: string, yOut: string, cu
   const packed = from.nextElementSibling!.getAttribute("result")!;
   from.nextElementSibling!.remove();
   from.replaceWith(image({ ...box, result: packed, href: xyUrl }));
-  const weight = weightOut && fields?.w ? f.querySelector(`[result="${weightOut}"]`) : null;
-  if (weight) {
-    // The image carries the weight in alpha and replaces the primitive that
-    // made it; scaled up smoothly over the box.
-    const old = weight.getAttribute("in");
-    weight.replaceWith(image({ ...box, result: weightOut!, href: await decoded(fields!.w!) }));
-    // The live weight it read from, if nothing else reads it.
-    if (old && !f.querySelector(`[in="${old}"], [in2="${old}"]`)) f.querySelector(`[result="${old}"]`)?.remove();
-  }
   if (mask) {
     const parts = [...f.children].filter(isMask);
     parts[parts.length - 1]!.after(image({ ...mask.box, result: mask.result, href: maskUrl }));
@@ -424,8 +425,22 @@ let instances = 0;
  * them. Size changes of the host are followed automatically.
  */
 export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions = {}) {
-  const { radius = 30, rim = 1.3, blur = 2.5, saturate = 1.1, reflect = true, reflectStrength = 2.5 } = options;
+  const {
+    radius = 30,
+    rim = 1.3,
+    blur = 2.5,
+    saturate = 1.1,
+    reflect = true,
+    reflectStrength = 2.5,
+    promote = true,
+  } = options;
   const uid = ++instances;
+  if (promote && !document.getElementById("lg-promote")) {
+    const st = document.createElement("style");
+    st.id = "lg-promote";
+    st.textContent = `${promote === true ? PROMOTE_DEFAULT : promote} { will-change: transform }`;
+    document.head.append(st);
+  }
   const refractId = `lg-refract-${uid}`;
   const reflectId = `lg-reflect-${uid}`;
 
@@ -464,29 +479,11 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   el(refrFilter, "feComposite", { in: "tmag", in2: "sfield", operator: "arithmetic", ...TILT_MULTIPLY, result: "tvec" });
   const tiltAdd = el(refrFilter, "feComposite", { in: "rx", in2: "tvec", operator: "arithmetic", k1: 0, k2: 1, result: "rxt" });
   const refrDisp = packField(refrFilter, "rxt", "ry", "rmap");
-  // Fold band anti-aliasing. feDisplacementMap samples the nearest pixel:
-  // where the glass squeezes the picture (the fold) that aliases into
-  // stripes, where it magnifies (just above) into stairs. A light blur of the
-  // bent result replaces it wherever the field stretches; the 1:1 centre
-  // keeps the sharp picture. A blurred backdrop, bent a second time, did not
-  // help against the stairs, which sampling makes after any prefilter, and
-  // cost a whole second displacement.
-  const foldWeight = el(refrFilter, "feComponentTransfer", { in: "rmap", result: "rwab" });
-  el(foldWeight, "feFuncR", { type: "table", tableValues: FOLD_WEIGHT });
-  el(foldWeight, "feFuncG", { type: "table", tableValues: FOLD_WEIGHT });
-  // Weight into alpha: x and y added, clamped to 1.
-  // The baked filter replaces this weight by one from the field's stretch
-  // (refractionField), which also covers the magnified zone above the fold.
-  el(refrFilter, "feColorMatrix", { in: "rwab", type: "matrix", values: "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1 1 0 0 0", result: "rfold" });
-  // Edges duplicated, so the blurred copy stays opaque up to the region's
-  // border and can simply be laid over the sharp one: two primitives less
-  // than adding it to the sharp one "out" the weight, which measured as a
-  // third of the dropped frames while scrolling.
-  el(refrFilter, "feGaussianBlur", { in: "bent", stdDeviation: FOLD_BLUR, edgeMode: "duplicate", result: "bentsoft" });
-  el(refrFilter, "feComposite", { in: "bentsoft", in2: "rfold", operator: "in", result: "rsoftpart" });
-  const foldMix = el(refrFilter, "feMerge", {});
-  el(foldMix, "feMergeNode", { in: "bent" });
-  el(foldMix, "feMergeNode", { in: "rsoftpart" });
+  // The displacement is the last step. A fold band after it (a 1.5px blur
+  // of the bent picture laid over the sharp one where the field squeezes
+  // it, four primitives and an image) changed nothing visible under the
+  // frost blur, and in Chrome its passes were the largest single cost of
+  // the glass, the one that cut the page off in fast flings. Gone.
 
   const reflFilter = el(defs, "filter", {
     id: reflectId,
@@ -602,7 +599,9 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   setBackdrop(rimLayer, bevel("rim", 0.84, 2.2));
 
   const frost = `${blur > 0 ? ` blur(${blur}px)` : ""} saturate(${saturate})`;
-  setBackdrop(pane, frost.trim());
+  const setPane = (v: string) => setBackdrop(pane, v);
+  const setRefl = (v: string) => setBackdrop(reflectLayer, v);
+  setPane(frost.trim());
 
   /* --- State --------------------------------------------------------------- */
 
@@ -616,7 +615,14 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   let bakeTimer = 0;
   let viewTimer = 0;
   let fieldTimer = 0;
-  let fieldKey = "";
+  // What the baked refraction and reflection in use were baked for; the
+  // two are baked apart, so a new overhang (the reflection alone) leaves
+  // the pane's baked filter in place.
+  let refrKey = "";
+  let reflKey = "";
+  let pendRefr = false;
+  let pendRefl = false;
+  let bakedOnce = false;
   let lastSpot = "";
 
   const measureAvail = (): ReflectAvail => {
@@ -697,73 +703,88 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     }
   };
 
-  /** Live graph while the size moves, precomputed fields once it settles. */
-  const useLiveFields = () => {
-    setBackdrop(pane, `url(#${refractId})${frost}`);
-    if (refl) setBackdrop(reflectLayer, `url(#${reflectId})`);
-  };
+  /* Live graph while the size moves, precomputed fields once it settles.
+     The first bake goes at once: until it lands, the glass costs its live
+     graphs (some 70 primitives and their tile images). Later changes wait
+     a moment, so a size animation is not baked on every frame. */
   const scheduleFields = () => {
     if (!refr) return;
-    const map = refl;
-    const field = refr;
-    const key = `${w}x${h}:${map ? map.pad.join(",") : "-"}`;
-    if (key === fieldKey) return;
-    fieldKey = key;
-    useLiveFields();
-    if (!ringKey.startsWith(`${w}x${h}@`)) clearRings();
+    const rKey = `${w}x${h}`;
+    const fKey = refl ? `${rKey}:${refl.pad.join(",")}` : "";
+    if (rKey !== refrKey) {
+      refrKey = rKey;
+      pendRefr = true;
+      setPane(`url(#${refractId})${frost}`);
+      if (!ringKey.startsWith(`${rKey}@`)) clearRings();
+    }
+    if (fKey !== reflKey) {
+      reflKey = fKey;
+      pendRefl = true;
+      if (refl) setRefl(`url(#${reflectId})`);
+    }
+    if (!pendRefr && !pendRefl) return;
     clearTimeout(fieldTimer);
     fieldTimer = window.setTimeout(async () => {
+      const doRefr = pendRefr;
+      const doRefl = pendRefl && !!refl;
+      pendRefr = pendRefl = false;
+      const field = refr!;
+      const map = refl;
       try {
-        const region = { x: -REGION, y: -REGION, width: w + 2 * REGION, height: h + 2 * REGION };
-        const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", REFRACT_FIELD_SCALE, {
-          box: region,
-          fields: refractionField(field, w, h, { x: region.x, y: region.y, w: region.width, h: region.height }, REFRACT_FIELD_SCALE),
-          weightOut: "rfold",
-        });
-        let reflBaked = "";
-        if (map) {
+        if (doRefr) {
+          const region = { x: -REGION, y: -REGION, width: w + 2 * REGION, height: h + 2 * REGION };
+          const refrBaked = await bakeFilter(refrFilter, "rxt", "ry", "rmapya", REFRACT_FIELD_SCALE, {
+            box: region,
+            fields: refractionField(field, w, h, { x: region.x, y: region.y, w: region.width, h: region.height }, REFRACT_FIELD_SCALE, REFRACT_FIELD_SCALE_X),
+          });
+          if (rKey === refrKey) {
+            // Still the size it was baked for.
+            setPane(`url(#${refrBaked})${frost}`);
+            bakedOnce = true;
+          }
+        }
+        if (doRefl && map) {
           const box = { x: map.pad[3], y: map.pad[0], width: w, height: h };
           // The field is flat beyond the outline, and the mask discards all
           // of it but the blur's reach into the box.
           const m = Math.ceil(3 * map.blur) + REGION;
-          reflBaked = await bakeFilter(reflFilter, "fx", "fy", "fmapya", REFLECT_FIELD_SCALE, {
+          const mask: BakeMask = { result: "fmask", parts: SLOTS.map((slot) => `fm${slot}`), box, scale: FIELD_SCALE };
+          const reflBaked = await bakeFilter(reflFilter, "fx", "fy", "fmapya", REFLECT_FIELD_SCALE, {
             box: { x: box.x - m, y: box.y - m, width: box.width + 2 * m, height: box.height + 2 * m },
-            mask: { result: "fmask", parts: SLOTS.map((slot) => `fm${slot}`), box, scale: FIELD_SCALE },
+            mask,
           });
+          if (fKey === reflKey) setRefl(`url(#${reflBaked})`);
         }
-        if (key !== fieldKey) return; // the size moved on meanwhile
-        setBackdrop(pane, `url(#${refrBaked})${frost}`);
-        if (reflBaked) setBackdrop(reflectLayer, `url(#${reflBaked})`);
         await applyRings();
       } catch {
         // Canvas or SVG image unavailable: the live graph stays, it only costs more.
       }
-    }, 300);
+    }, bakedOnce ? 300 : 0);
   };
 
   /** New reflection map: when the bake size or the free space around changes. */
   const rebuildReflection = () => {
     refl = reflect && avail ? buildReflection(reflSize.w, reflSize.h, radius, rim, reflectStrength, avail) : null;
-    fieldKey = "";
+    reflKey = "";
     reflectLayer.hidden = !refl;
     if (!refl) return;
 
     setFieldImages(reflField, refl);
     setAttr(reflBlur, "stdDeviation", refl.blur);
     const [pt, pr, pb, pl] = refl.pad;
-    reflectLayer.style.inset = `${-pt}px ${-pr}px ${-pb}px ${-pl}px`;
     // Same shape as the mask: keeps the filter work to the outline instead
     // of the whole overhang.
     const clip = `inset(${pt}px ${pr}px ${pb}px ${pl}px round var(--lg-r))`;
+    reflectLayer.style.inset = `${-pt}px ${-pr}px ${-pb}px ${-pl}px`;
     setStyle(reflectLayer, "clip-path", clip);
     setStyle(reflectLayer, "-webkit-clip-path", clip);
     for (const slot of SLOTS) setAttr(reflMask[slot]!, "href", refl.mask.img[slot]!);
-    setBackdrop(reflectLayer, `url(#${reflectId})`);
+    setRefl(`url(#${reflectId})`);
   };
 
   const bake = (short: number) => {
     baked = short;
-    fieldKey = ""; // new tiles: the precomputed fields are stale
+    refrKey = reflKey = ""; // new tiles: the precomputed fields are stale
     refr = cachedRefraction(short, radius);
     setFieldImages(refrField, refr);
     for (const slot of SLOTS) setAttr(tiltTiles[slot]!, "href", refr.tilt.img[slot]!);
@@ -772,7 +793,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     // otherwise it would rebuild on every frame of a width animation.
     reflSize = { w, h };
     rebuildReflection();
-    setBackdrop(pane, `url(#${refractId})${frost}`);
+    setPane(`url(#${refractId})${frost}`);
   };
 
   const onResize = () => {

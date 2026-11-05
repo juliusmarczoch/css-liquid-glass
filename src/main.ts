@@ -224,6 +224,9 @@ const park = () => {
 };
 
 // A radius larger than the box is clamped to half the short side: a pill.
+// The glass puts <main> into a compositor layer of its own (promote,
+// default): without that, Chromium does not raster the page in time
+// during a fast fling and shows it cut off below the glass.
 const lg = createLiquidGlass(glass, { radius: 9999, rim: 1.1 });
 // Never quite 0: a layer at opacity 0 may not be rasterised, and would then
 // flash on the first frame of the fade.
