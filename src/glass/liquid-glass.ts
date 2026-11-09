@@ -103,6 +103,35 @@ const SVG_BACKDROP = typeof navigator !== "undefined" && "userAgentData" in navi
 /** False where the glass falls back to frosted glass without refraction. */
 export const supportsRefraction = SVG_BACKDROP;
 
+/* Whether CSS anchor positioning can keep the covers on the host. It then
+   does so in the browser itself, on every frame and however the host moves:
+   a resize, a scroll, a transition, an animated translate. Only where
+   anchor() also follows the host's transforms, though: browsers differ on
+   that (Chrome 144+ and Safari 27+ do, Safari 26 and Firefox do not), and
+   one that ignores them would leave the covers behind a translated host.
+   Probed once rather than read from a version number. */
+let anchorProbe: boolean | undefined;
+const anchorsFollowHost = () => {
+  if (anchorProbe !== undefined) return anchorProbe;
+  anchorProbe = false;
+  if (typeof CSS === "undefined" || !CSS.supports("anchor-name", "--lg") || !CSS.supports("top", "anchor(top)"))
+    return anchorProbe;
+  const hidden = "position:fixed;visibility:hidden;pointer-events:none;";
+  const a = document.createElement("div");
+  const b = document.createElement("div");
+  a.style.cssText = `${hidden}top:0;left:0;width:10px;height:10px;anchor-name:--lg-probe;translate:0 7px`;
+  b.style.cssText =
+    `${hidden}position-anchor:--lg-probe;top:anchor(top);left:anchor(left);` +
+    "width:anchor-size(width);height:anchor-size(height)";
+  document.body.append(a, b);
+  const ra = a.getBoundingClientRect();
+  const rb = b.getBoundingClientRect();
+  anchorProbe = Math.abs(ra.top - rb.top) < 0.5 && Math.abs(ra.width - rb.width) < 0.5;
+  a.remove();
+  b.remove();
+  return anchorProbe;
+};
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 function el<K extends keyof SVGElementTagNameMap>(parent: Node, tag: K, attrs: Record<string, string | number> = {}) {
@@ -519,6 +548,30 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   const rimLayer = layer(root, "lg-layer lg-edge lg-rim");
   host.prepend(root);
 
+  // The covers are siblings, so nothing ties them to the host's position.
+  // Where the browser can (see anchorsFollowHost), CSS anchor positioning
+  // does: it keeps them on the host on every frame, however the host moves.
+  // Everywhere else place() lays them out in px. The host keeps any
+  // anchor-name it already has.
+  const anchorName = `--lg-host-${uid}`;
+  const ownAnchor = host.style.getPropertyValue("anchor-name");
+  const anchors = anchorsFollowHost();
+  if (anchors) {
+    const given = getComputedStyle(host).getPropertyValue("anchor-name").trim();
+    host.style.setProperty("anchor-name", given && given !== "none" ? `${given}, ${anchorName}` : anchorName);
+  }
+  /** Covers the browser keeps on the host. One found elsewhere (see place)
+   *  leaves this set for good and is laid out in px. */
+  const anchored = new Set<HTMLElement>();
+  const anchorTo = (c: HTMLElement) => {
+    c.style.setProperty("position-anchor", anchorName);
+    c.style.setProperty("left", "anchor(left)");
+    c.style.setProperty("top", "anchor(top)");
+    c.style.setProperty("width", "anchor-size(width)");
+    c.style.setProperty("height", "anchor-size(height)");
+    anchored.add(c);
+  };
+
   // The two layers that differ most between light and dark: a sibling right
   // after the host, not a layer inside it, so they can be crossfaded without
   // touching the glass (addCover). A paint change inside the host repaints
@@ -531,6 +584,7 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     c.style.position = "absolute";
     layer(c, "lg-layer lg-edge lg-spec");
     layer(c, "lg-layer lg-underlay");
+    if (anchors) anchorTo(c);
     return c;
   };
   const cover = makeCover();
@@ -540,7 +594,9 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   // A near-invisible fill right under the glass; refresh() changes it so
   // Chromium redraws the glass (see refresh below). It is page content, a
   // sibling before the host, not a layer inside it: a change inside the host
-  // repaints the host's own layers, and that flickered.
+  // repaints the host's own layers, and that flickered. Being before the
+  // host, it cannot anchor to it (an anchor has to come first), so place()
+  // always lays it out.
   const tick = document.createElement("span");
   tick.className = "lg-tick";
   tick.setAttribute("aria-hidden", "true");
@@ -548,18 +604,40 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   tick.style.position = "absolute";
   host.before(tick);
 
-  /** Lays the fill and the cover onto the host. Ignores transforms. */
+  /** Whether an anchored cover really sits on the host (r: the host's box). */
+  const onHost = (el: HTMLElement, r: DOMRect) => {
+    // Nothing to compare while the host or the cover is not rendered.
+    if (!host.getClientRects().length || !el.getClientRects().length) return true;
+    const c = el.getBoundingClientRect();
+    return (
+      Math.abs(c.left - r.left) < 1 &&
+      Math.abs(c.top - r.top) < 1 &&
+      Math.abs(c.width - r.width) < 1 &&
+      Math.abs(c.height - r.height) < 1
+    );
+  };
+
+  /** Lays the fill and the covers onto the host. Ignores transforms, except
+   *  on a cover the browser keeps on the host: that one follows them. */
   const place = () => {
     const cs = getComputedStyle(host);
     const fixed = cs.position === "fixed";
     const r = host.getBoundingClientRect();
     // Unrounded, unlike offsetLeft/offsetTop: a pixel off shows at the edge.
     const o = fixed ? { left: 0, top: 0 } : (host.offsetParent ?? document.body).getBoundingClientRect();
-    // Without the host's own translate: give the fill and the covers the same
-    // one (an animated translate, say) and they move along.
+    // Without the host's own translate: give the fill (and covers laid out in
+    // px) the same one (an animated translate, say) and they move along.
     const [tx = 0, ty = 0] = cs.translate === "none" ? [] : cs.translate.split(" ").map(parseFloat);
     for (const el of [tick, ...covers]) {
       setStyle(el, "position", fixed ? "fixed" : "absolute");
+      if (anchored.has(el)) {
+        if (onHost(el, r)) continue;
+        // Not on the host after all: a cover given the host's translate
+        // itself (the way to follow one before anchoring), or appended to a
+        // parent where it cannot anchor. Laid out in px from here on.
+        el.style.removeProperty("position-anchor");
+        anchored.delete(el);
+      }
       setStyle(el, "left", `${r.left - o.left - tx}px`);
       setStyle(el, "top", `${r.top - o.top - ty}px`);
       setStyle(el, "width", `${r.width}px`);
@@ -822,6 +900,11 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
   // the ELEMENT stands still (transitions fire no scroll events), and swap
   // nothing while it moves: a fresh mask is not rasterised for a frame.
   const onView = () => {
+    // The fill and the covers go along right away. Waiting for the element
+    // to stand still left them behind it for a quarter to half a second
+    // whenever it moved: a fixed glass centred in a viewport whose height
+    // changes (a mobile address bar) showed its veil and edge light beside it.
+    place();
     clearTimeout(viewTimer);
     viewTimer = window.setTimeout(function check() {
       const r = host.getBoundingClientRect();
@@ -890,10 +973,50 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     onView();
   };
 
+  // A CSS transition or animation that moves the host or an ancestor (left,
+  // top, inset, margin: the recommended way to move the glass) fires no
+  // resize and no scroll, so nothing above notices it. Follow it frame by
+  // frame until it is over and the host stands still, then re-measure the
+  // reflection once. Anchored covers move by themselves; this carries the
+  // fill, and covers laid out in px.
+  let followReq = 0;
+  const moving = () =>
+    document.getAnimations().some((a) => {
+      // Scroll-driven animations follow the scroll, which onScroll handles.
+      if (a.playState !== "running" || a.timeline !== document.timeline) return false;
+      const target = (a.effect as KeyframeEffect | null)?.target;
+      const end = a.effect?.getComputedTiming().endTime;
+      return !!target && target.contains(host) && typeof end === "number" && Number.isFinite(end);
+    });
+  const follow = () => {
+    if (followReq) return;
+    let last = "";
+    let still = 0;
+    const step = () => {
+      place();
+      const r = host.getBoundingClientRect();
+      const spot = `${r.left}:${r.top}:${r.width}:${r.height}`;
+      still = spot === last ? still + 1 : 0;
+      last = spot;
+      if (still < 3 || moving()) {
+        followReq = requestAnimationFrame(step);
+      } else {
+        followReq = 0;
+        onView();
+      }
+    };
+    followReq = requestAnimationFrame(step);
+  };
+  const onMotion = (e: Event) => {
+    if (e.target instanceof Node && e.target.contains(host)) follow();
+  };
+
   const ro = new ResizeObserver(onResize);
   ro.observe(host);
   addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", onView, { passive: true });
+  document.addEventListener("transitionrun", onMotion, { capture: true, passive: true });
+  document.addEventListener("animationstart", onMotion, { capture: true, passive: true });
   onResize();
   // The first measurement may run before layout or fonts have settled.
   onView();
@@ -907,12 +1030,22 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
     refresh,
     /**
      * Re-places the fill under the glass and the covers over it after the
-     * host moved without changing size, for example from fixed to absolute.
+     * host moved without changing size in a way the glass does not see: from
+     * a script, say, or from fixed to absolute. Resizes, scrolling and CSS
+     * transitions and animations of the host or an ancestor are followed
+     * already.
      */
     update() {
       place();
       onView();
     },
+    /**
+     * True where the browser keeps the covers on the host itself (CSS anchor
+     * positioning that follows transforms). They then follow an animated
+     * translate of the host too: do not give them the same one. Elsewhere
+     * they ignore the host's translate, so give them the same one to follow.
+     */
+    coversFollowHost: anchors,
     /**
      * A further cover with a fixed tuning, appended to `parent`; hides the
      * built-in one. Make one light and one dark cover and crossfade them with
@@ -936,11 +1069,18 @@ export function createLiquidGlass(host: HTMLElement, options: LiquidGlassOptions
       clearTimeout(viewTimer);
       clearTimeout(fieldTimer);
       cancelAnimationFrame(tickReq);
+      cancelAnimationFrame(followReq);
       removeEventListener("scroll", onScroll);
       removeEventListener("resize", onView);
+      document.removeEventListener("transitionrun", onMotion, { capture: true });
+      document.removeEventListener("animationstart", onMotion, { capture: true });
       host.querySelectorAll(":scope > .lg-layer, :scope > .lg-defs").forEach((n) => n.remove());
       tick.remove();
       for (const c of covers) c.remove();
+      if (anchors) {
+        if (ownAnchor) host.style.setProperty("anchor-name", ownAnchor);
+        else host.style.removeProperty("anchor-name");
+      }
       host.classList.remove("lg-host");
     },
   };

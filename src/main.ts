@@ -202,9 +202,12 @@ const parkScroll = () => {
   const from = stop.getBoundingClientRect().bottom + scrollY - fixedMid;
   const max = Math.max(1, document.documentElement.scrollHeight - document.documentElement.clientHeight);
   const at = Math.min(100, Math.max(0, (from / max) * 100));
+  // Covers the browser keeps on the glass follow its translate by themselves;
+  // given the same one as well, they would move twice as far.
+  const riders = lg.coversFollowHost ? ".glass, .glass-text, .lg-tick" : ".glass, .glass-text, .glass-tone, .lg-tick";
   const css =
     `@keyframes park { 0%, ${at.toFixed(5)}% { translate: 0 0 } 100% { translate: 0 ${(-Math.max(0, max - from)).toFixed(2)}px } }` +
-    `.scroll-copy :is(.glass, .glass-text, .glass-tone, .lg-tick) { animation: park linear both; animation-timeline: scroll(root) }`;
+    `.scroll-copy :is(${riders}) { animation: park linear both; animation-timeline: scroll(root) }`;
   if (parkKeys.textContent !== css) parkKeys.textContent = css;
 };
 const park = () => {

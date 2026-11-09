@@ -40,7 +40,9 @@ const glass = createLiquidGlass(document.querySelector(".my-button")!, {
 // call once per frame so it does not freeze in the reflection
 glass.refresh();
 
-// after moving the element without resizing it (e.g. fixed -> absolute)
+// after moving the element in a way the glass does not see (from a script,
+// or fixed -> absolute); resizes, scrolling and CSS transitions or
+// animations of the element or its ancestors are followed already
 glass.update();
 
 // a light and a dark copy of the veil and edge light, to crossfade
